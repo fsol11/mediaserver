@@ -188,7 +188,7 @@ json_key() { python3 -c "import json; print(json.load(open('$1')).get('main',{})
 # ============================================================
 echo ""
 echo -e "${BLD}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLD}║       Media Server — Full Automated Setup            ║${NC}"
+echo -e "${BLD}║        Media Server — Fully Automated Setup          ║${NC}"
 echo -e "${BLD}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -203,47 +203,11 @@ TZ=$(timedatectl show --property=Timezone --value 2>/dev/null) \
 
 # Generate .env if it doesn't exist
 if [[ ! -f "$ENV_FILE" ]]; then
-    info "Creating .env with defaults — edit credentials before re-running"
-    cat > "$ENV_FILE" <<'ENVTEMPLATE'
-# ============================================================
-# Media Server — Config
-# Edit this file before running: bash install.sh
-# ============================================================
-
-# qBittorrent credentials
-QBIT_USERNAME="admin"
-QBIT_PASSWORD="changeme"
-
-# Jellyfin admin account — created on first install
-JELLYFIN_ADMIN_USER="admin"
-JELLYFIN_ADMIN_PASSWORD="changeme"
-
-# ============================================================
-# Cloudflare Tunnel (optional)
-# Create at: https://one.dash.cloudflare.com → Networks → Tunnels
-# ============================================================
-CLOUDFLARE_TUNNEL_TOKEN=
-
-# ============================================================
-# Media directories — host paths to your media storage
-# ============================================================
-DIR_DOWNLOADS="/media/$USER/DATA/Downloads"
-DIR_MOVIES="/media/$USER/DATA/Movies"
-DIR_TV="/media/$USER/DATA/TV Shows"
-DIR_AUDIOBOOKS="/media/$USER/DATA/Audiobooks"
-# Path shown in the Homepage disk usage widget (usually the drive root)
-DATA_ROOT="/media/$USER/DATA"
-
-# ============================================================
-# API Keys — auto-populated by install.sh, never edit manually
-# ============================================================
-SONARR_API_KEY=
-RADARR_API_KEY=
-PROWLARR_API_KEY=
-BAZARR_API_KEY=
-JELLYFIN_API_KEY=
-JELLYSEERR_API_KEY=
-ENVTEMPLATE
+    if [[ ! -f "$STACK_DIR/.env.initial" ]]; then
+        die ".env.initial template not found — cannot create .env"
+    fi
+    info "Creating .env from .env.initial — edit credentials before re-running"
+    cp "$STACK_DIR/.env.initial" "$ENV_FILE"
     # Replace $USER placeholder with actual username
     sed -i "s|\$USER|$(id -un)|g" "$ENV_FILE"
     ok "Created .env — please edit credentials and paths, then re-run: bash install.sh"

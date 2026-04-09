@@ -121,6 +121,7 @@ wait_http "http://localhost:7878/api/v3/system/status?apikey=${RADARR_API_KEY}" 
 wait_http "http://localhost:8989/api/v3/system/status?apikey=${SONARR_API_KEY}" "Sonarr"       120 || die "Sonarr not responding"
 wait_http "http://localhost:9696/api/v1/system/status?apikey=${PROWLARR_API_KEY}" "Prowlarr"     120 || die "Prowlarr not responding"
 wait_http "http://localhost:6767/api/system/status?apikey=${BAZARR_API_KEY}" "Bazarr" 120 || fail "Bazarr not responding — skipping its config"
+wait_http "http://localhost:8191"           "FlareSolverr" 60 || fail "FlareSolverr not responding — indexers behind Cloudflare may not work"
 
 # ============================================================
 # 2. QBITTORRENT — Set default save path and credentials
@@ -356,7 +357,118 @@ JSON
     else fail "Failed to add Sonarr app (HTTP $(code "$resp2")): $(body "$resp2")"; fi
 fi
 
-# 5c. Trigger full sync
+# 5c. FlareSolverr proxy (for Cloudflare-protected indexers)
+proxy_resp=$(arr_get "$PROWLARR_BASE/api/v1/indexerProxy" "$PROWLARR_KEY")
+if arr_exists "$proxy_resp" "implementation" "FlareSolverr"; then
+    skip "FlareSolverr proxy already configured"
+else
+    proxy_payload=$(cat <<JSON
+{
+  "name": "FlareSolverr",
+  "fields": [
+    {"name": "host",           "value": "http://flaresolverr:8191/"},
+    {"name": "requestTimeout", "value": 60}
+  ],
+  "implementationName": "FlareSolverr",
+  "implementation": "FlareSolverr",
+  "configContract": "FlareSolverrSettings",
+  "tags": []
+}
+JSON
+)
+    resp2=$(arr_post "$PROWLARR_BASE/api/v1/indexerProxy" "$PROWLARR_KEY" "$proxy_payload")
+    if ok_code "$resp2"; then ok "FlareSolverr proxy added to Prowlarr"
+    elif is_already_exists "$(body "$resp2")"; then skip "FlareSolverr proxy already configured"
+    else fail "Failed to add FlareSolverr proxy (HTTP $(code "$resp2")): $(body "$resp2")"; fi
+fi
+
+# 5d. Add public indexers from PROWLARR_INDEXERS list
+if [[ -n "${PROWLARR_INDEXERS:-}" ]]; then
+    # Fetch indexer schema for building payloads
+    PROWLARR_SCHEMA_FILE=$(mktemp)
+    curl -sf "http://localhost:9696/api/v1/indexer/schema" -H "X-Api-Key: $PROWLARR_KEY" > "$PROWLARR_SCHEMA_FILE" 2>/dev/null
+    schema_count=$(python3 -c "import json; print(len(json.load(open('$PROWLARR_SCHEMA_FILE'))))" 2>/dev/null || echo 0)
+
+    if (( schema_count == 0 )); then
+        fail "Could not fetch Prowlarr indexer schemas — skipping indexer setup"
+    else
+        existing_indexers=$(arr_get "$PROWLARR_BASE/api/v1/indexer" "$PROWLARR_KEY")
+        IFS=',' read -ra INDEXER_LIST <<< "$PROWLARR_INDEXERS"
+        added=0; skipped=0; failed_idx=0; cf_blocked=0
+
+        for idx_name in "${INDEXER_LIST[@]}"; do
+            # Trim whitespace
+            idx_name=$(echo "$idx_name" | xargs)
+            [[ -z "$idx_name" ]] && continue
+
+            # Check if already added (match on definitionName)
+            if echo "$(body "$existing_indexers")" | python3 -c "
+import json,sys
+try:
+    items=json.load(sys.stdin)
+    found=any(str(i.get('definitionName','')).lower()=='${idx_name}'.lower() for i in items)
+    sys.exit(0 if found else 1)
+except: sys.exit(1)
+" 2>/dev/null; then
+                skipped=$((skipped + 1))
+                continue
+            fi
+
+            # Build minimal payload from schema
+            payload=$(python3 << PYEOF
+import json
+with open('$PROWLARR_SCHEMA_FILE') as fh:
+    schemas = json.load(fh)
+schema = next((s for s in schemas if s.get('definitionName','').lower() == '${idx_name}'.lower()), None)
+if not schema:
+    print('')
+else:
+    p = {
+        'definitionName': schema['definitionName'],
+        'name': schema['definitionName'],
+        'implementation': schema.get('implementation', 'Cardigann'),
+        'configContract': schema.get('configContract', 'CardigannSettings'),
+        'protocol': schema.get('protocol', 'torrent'),
+        'enable': True,
+        'priority': 25,
+        'appProfileId': 1,
+        'fields': schema.get('fields', []),
+        'tags': []
+    }
+    print(json.dumps(p))
+PYEOF
+)
+
+            if [[ -z "$payload" ]]; then
+                fail "Indexer '${idx_name}' not found in Prowlarr schema"
+                failed_idx=$((failed_idx + 1))
+                continue
+            fi
+
+            resp2=$(arr_post "$PROWLARR_BASE/api/v1/indexer" "$PROWLARR_KEY" "$payload")
+            if ok_code "$resp2"; then
+                added=$((added + 1))
+            elif is_already_exists "$(body "$resp2")"; then
+                skipped=$((skipped + 1))
+            elif echo "$(body "$resp2")" | grep -qi "CloudFlare Protection\|blocked by Cloud\|SSL connection could not\|Unable to connect to indexer.*Redirected"; then
+                cf_blocked=$((cf_blocked + 1))
+            else
+                fail "Failed to add indexer '${idx_name}' (HTTP $(code "$resp2")): $(body "$resp2")"
+                failed_idx=$((failed_idx + 1))
+            fi
+        done
+
+        (( added > 0 ))      && ok "${added} indexer(s) added"
+        (( skipped > 0 ))    && skip "${skipped} indexer(s) already existed"
+        (( cf_blocked > 0 )) && skip "${cf_blocked} indexer(s) blocked by Cloudflare/SSL — add manually via Prowlarr UI"
+        (( failed_idx > 0 )) && fail "${failed_idx} indexer(s) failed"
+    fi
+    rm -f "$PROWLARR_SCHEMA_FILE"
+else
+    skip "PROWLARR_INDEXERS not set in .env — skipping indexer setup"
+fi
+
+# 5e. Trigger full sync
 resp=$(arr_post "$PROWLARR_BASE/api/v1/command" "$PROWLARR_KEY" '{"name":"ApplicationIndexerSync"}')
 ok_code "$resp" && ok "Indexer sync triggered" \
     || fail "Sync trigger failed (HTTP $(code "$resp"))"
@@ -617,7 +729,7 @@ else
 fi
 echo ""
 echo "  Still manual (can't be automated):"
-echo "   • Prowlarr → Indexers: add your trackers/indexers"
+
 echo "   • Bazarr → Settings → Subtitles: add providers"
 echo "   • Uptime Kuma → create account and add monitors"
 echo "   • Audiobookshelf → create admin account"

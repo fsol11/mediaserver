@@ -3,7 +3,8 @@
 # ============================================================
 # Services: qBittorrent, Prowlarr, Radarr, Sonarr, Jellyfin,
 #           Jellyseerr, Bazarr, Recyclarr, Unpackerr,
-#           Homepage, Uptime Kuma, Audiobookshelf, Cloudflared
+#           Homepage, Uptime Kuma, Audiobookshelf, Cloudflared,
+#           FlareSolverr
 #
 # FIRST RUN:
 #   Run: bash install.sh   (does everything automatically)
@@ -307,6 +308,25 @@ services:
       - "${DIR_AUDIOBOOKS}:/audiobooks"
     ports:
       - "13378:80"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # FlareSolverr - Cloudflare CAPTCHA Bypass Proxy
+  # Used by Prowlarr to access indexers behind Cloudflare protection
+  # No WebUI needed - runs as a headless browser proxy
+  # ============================================================
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - TZ=${TZ}
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+    ports:
+      - "8191:8191"
     networks:
       - mediaserver
     restart: unless-stopped
