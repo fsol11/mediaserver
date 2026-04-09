@@ -11,6 +11,9 @@
 
 set -uo pipefail
 
+ERROR_COUNT=0
+ERRORS=()
+
 STACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$STACK_DIR/.env"
 
@@ -31,7 +34,7 @@ set -o allexport; source "$ENV_FILE"; set +o allexport
 GRN='\033[0;32m'; YLW='\033[1;33m'; RED='\033[0;31m'; BLD='\033[1m'; NC='\033[0m'
 ok()      { echo -e "  ${GRN}✓${NC}  $*"; }
 skip()    { echo -e "  ${YLW}–${NC}  $*"; }
-fail()    { echo -e "  ${RED}✗${NC}  $*"; }
+fail()    { echo -e "  ${RED}✗${NC}  $*"; ERROR_COUNT=$((ERROR_COUNT + 1)); ERRORS+=("$*"); }
 section() { echo -e "\n${BLD}── $* ${NC}$(printf '─%.0s' $(seq 1 $((50 - ${#1}))))"; }
 die()     { echo -e "${RED}FATAL:${NC} $*"; exit 1; }
 
@@ -82,6 +85,11 @@ try:
 except: sys.exit(1)
 " 2>/dev/null
 }
+is_already_exists() {
+    # Check if an API error response means the resource already exists
+    local resp_body="$1"
+    echo "$resp_body" | grep -qiE "already configured|should be unique|already exists"
+}
 
 # ── Validate API keys ──────────────────────────────────────
 echo ""
@@ -109,26 +117,56 @@ fi
 # ============================================================
 section "Checking services"
 wait_http "http://localhost:8080"           "qBittorrent" 120 || fail "qBittorrent not responding — skipping its config"
-wait_http "http://localhost:7878/api/v3/system/status" "Radarr"       120 || die "Radarr not responding"
-wait_http "http://localhost:8989/api/v3/system/status" "Sonarr"       120 || die "Sonarr not responding"
-wait_http "http://localhost:9696/api/v1/system/status" "Prowlarr"     120 || die "Prowlarr not responding"
-wait_http "http://localhost:6767/api/system/status"    "Bazarr"       120 || fail "Bazarr not responding — skipping its config"
+wait_http "http://localhost:7878/api/v3/system/status?apikey=${RADARR_API_KEY}" "Radarr"       120 || die "Radarr not responding"
+wait_http "http://localhost:8989/api/v3/system/status?apikey=${SONARR_API_KEY}" "Sonarr"       120 || die "Sonarr not responding"
+wait_http "http://localhost:9696/api/v1/system/status?apikey=${PROWLARR_API_KEY}" "Prowlarr"     120 || die "Prowlarr not responding"
+wait_http "http://localhost:6767/api/system/status?apikey=${BAZARR_API_KEY}" "Bazarr" 120 || fail "Bazarr not responding — skipping its config"
 
 # ============================================================
-# 2. QBITTORRENT — Set default save path
+# 2. QBITTORRENT — Set default save path and credentials
 # ============================================================
 section "qBittorrent"
 
 QBIT_COOKIE=$(mktemp)
+qbit_logged_in=false
+
+# Try logging in with desired credentials first (idempotent re-run)
 login_resp=$(curl -sc "$QBIT_COOKIE" -X POST "http://localhost:8080/api/v2/auth/login" \
     --data-urlencode "username=${QBIT_USERNAME:-admin}" \
     --data-urlencode "password=${QBIT_PASSWORD:-adminadmin}" 2>/dev/null)
-
 if [[ "$login_resp" == "Ok." ]]; then
-    prefs_resp=$(http PATCH "http://localhost:8080/api/v2/app/setPreferences" \
-        -b "$QBIT_COOKIE" \
+    qbit_logged_in=true
+    skip "Logged in with configured credentials"
+else
+    # First run: qBit uses admin + random temp password from logs
+    temp_pass=$(docker logs qbittorrent 2>&1 | grep -oP 'temporary password.*: \K.*' | tail -1)
+    if [[ -n "$temp_pass" ]]; then
+        login_resp=$(curl -sc "$QBIT_COOKIE" -X POST "http://localhost:8080/api/v2/auth/login" \
+            --data-urlencode "username=admin" \
+            --data-urlencode "password=${temp_pass}" 2>/dev/null)
+        if [[ "$login_resp" == "Ok." ]]; then
+            qbit_logged_in=true
+            # Set desired credentials
+            prefs_json=$(python3 -c "
+import json, sys
+print(json.dumps({
+    'web_ui_username': sys.argv[1],
+    'web_ui_password': sys.argv[2]
+}))" "${QBIT_USERNAME:-admin}" "${QBIT_PASSWORD:-adminadmin}")
+            cred_resp=$(curl -s -o /dev/null -w "%{http_code}" -b "$QBIT_COOKIE" \
+                -X POST "http://localhost:8080/api/v2/app/setPreferences" \
+                --data-urlencode "json=$prefs_json")
+            [[ "$cred_resp" == "200" ]] && ok "Credentials updated to ${QBIT_USERNAME:-admin}" \
+                || fail "Could not update credentials (HTTP $cred_resp)"
+        fi
+    fi
+fi
+
+if [[ "$qbit_logged_in" == true ]]; then
+    prefs_resp=$(curl -s -o /dev/null -w "%{http_code}" -b "$QBIT_COOKIE" \
+        -X POST "http://localhost:8080/api/v2/app/setPreferences" \
         --data-urlencode 'json={"save_path":"/downloads","temp_path":"/downloads/incomplete","temp_path_enabled":true,"incomplete_files_ext":true}')
-    ok_code "$prefs_resp" && ok "Save path set to /downloads" || fail "Could not set preferences (HTTP $(code "$prefs_resp"))"
+    [[ "$prefs_resp" == "200" ]] && ok "Save path set to /downloads" || fail "Could not set preferences (HTTP $prefs_resp)"
 else
     fail "qBittorrent login failed — check QBIT_USERNAME/QBIT_PASSWORD in .env"
 fi
@@ -177,8 +215,9 @@ else
 JSON
 )
     resp=$(arr_post "$RADARR_BASE/api/v3/downloadclient" "$RADARR_KEY" "$payload")
-    ok_code "$resp" && ok "qBittorrent download client added" \
-        || fail "Failed to add qBittorrent to Radarr (HTTP $(code "$resp")): $(body "$resp")"
+    if ok_code "$resp"; then ok "qBittorrent download client added"
+    elif is_already_exists "$(body "$resp")"; then skip "qBittorrent already configured in Radarr"
+    else fail "Failed to add qBittorrent to Radarr (HTTP $(code "$resp")): $(body "$resp")"; fi
 fi
 
 # 3b. Root folder
@@ -187,8 +226,9 @@ if arr_exists "$resp" "path" "/movies"; then
     skip "Root folder /movies already set"
 else
     resp=$(arr_post "$RADARR_BASE/api/v3/rootfolder" "$RADARR_KEY" '{"path":"/movies"}')
-    ok_code "$resp" && ok "Root folder /movies added" \
-        || fail "Failed to add root folder (HTTP $(code "$resp")): $(body "$resp")"
+    if ok_code "$resp"; then ok "Root folder /movies added"
+    elif is_already_exists "$(body "$resp")"; then skip "Root folder /movies already set"
+    else fail "Failed to add root folder (HTTP $(code "$resp")): $(body "$resp")"; fi
 fi
 
 # ============================================================
@@ -234,8 +274,9 @@ else
 JSON
 )
     resp=$(arr_post "$SONARR_BASE/api/v3/downloadclient" "$SONARR_KEY" "$payload")
-    ok_code "$resp" && ok "qBittorrent download client added" \
-        || fail "Failed to add qBittorrent to Sonarr (HTTP $(code "$resp")): $(body "$resp")"
+    if ok_code "$resp"; then ok "qBittorrent download client added"
+    elif is_already_exists "$(body "$resp")"; then skip "qBittorrent already configured in Sonarr"
+    else fail "Failed to add qBittorrent to Sonarr (HTTP $(code "$resp")): $(body "$resp")"; fi
 fi
 
 # 4b. Root folder
@@ -244,8 +285,9 @@ if arr_exists "$resp" "path" "/tv"; then
     skip "Root folder /tv already set"
 else
     resp=$(arr_post "$SONARR_BASE/api/v3/rootfolder" "$SONARR_KEY" '{"path":"/tv"}')
-    ok_code "$resp" && ok "Root folder /tv added" \
-        || fail "Failed to add root folder (HTTP $(code "$resp")): $(body "$resp")"
+    if ok_code "$resp"; then ok "Root folder /tv added"
+    elif is_already_exists "$(body "$resp")"; then skip "Root folder /tv already set"
+    else fail "Failed to add root folder (HTTP $(code "$resp")): $(body "$resp")"; fi
 fi
 
 # ============================================================
@@ -280,8 +322,9 @@ else
 JSON
 )
     resp2=$(arr_post "$PROWLARR_BASE/api/v1/applications" "$PROWLARR_KEY" "$payload")
-    ok_code "$resp2" && ok "Radarr app added to Prowlarr" \
-        || fail "Failed to add Radarr app (HTTP $(code "$resp2")): $(body "$resp2")"
+    if ok_code "$resp2"; then ok "Radarr app added to Prowlarr"
+    elif is_already_exists "$(body "$resp2")"; then skip "Radarr app already registered in Prowlarr"
+    else fail "Failed to add Radarr app (HTTP $(code "$resp2")): $(body "$resp2")"; fi
 fi
 
 # 5b. Sonarr app
@@ -308,8 +351,9 @@ else
 JSON
 )
     resp2=$(arr_post "$PROWLARR_BASE/api/v1/applications" "$PROWLARR_KEY" "$payload")
-    ok_code "$resp2" && ok "Sonarr app added to Prowlarr" \
-        || fail "Failed to add Sonarr app (HTTP $(code "$resp2")): $(body "$resp2")"
+    if ok_code "$resp2"; then ok "Sonarr app added to Prowlarr"
+    elif is_already_exists "$(body "$resp2")"; then skip "Sonarr app already registered in Prowlarr"
+    else fail "Failed to add Sonarr app (HTTP $(code "$resp2")): $(body "$resp2")"; fi
 fi
 
 # 5c. Trigger full sync
@@ -363,7 +407,7 @@ else
 }
 JSON
 )
-    resp=$(http PATCH "$BAZARR_BASE/api/system/settings" \
+    resp=$(http POST "$BAZARR_BASE/api/system/settings" \
         -H "X-API-KEY: $BAZARR_KEY" \
         -H "Content-Type: application/json" \
         -d "$payload")
@@ -390,7 +434,7 @@ else
 }
 JSON
 )
-    resp=$(http PATCH "$BAZARR_BASE/api/system/settings" \
+    resp=$(http POST "$BAZARR_BASE/api/system/settings" \
         -H "X-API-KEY: $BAZARR_KEY" \
         -H "Content-Type: application/json" \
         -d "$payload")
@@ -419,7 +463,18 @@ except: print(False)
 " 2>/dev/null)
 
     if [[ "$initialized" != "True" ]]; then
-        skip "Jellyseerr wizard not yet complete — run install.sh or complete it at http://localhost:5055"
+        # Try to finalize the wizard (auth was already done in install.sh)
+        init_resp=$(http POST "$JS_BASE/api/v1/settings/initialize" -H "X-Api-Key: $JS_KEY" -H "Content-Type: application/json")
+        if ok_code "$init_resp"; then
+            ok "Jellyseerr wizard finalized"
+            initialized="True"
+        else
+            skip "Jellyseerr wizard not yet complete — run install.sh or complete it at http://localhost:5055"
+        fi
+    fi
+
+    if [[ "$initialized" != "True" ]]; then
+        : # already warned above
     else
         # Get Radarr quality profiles
         radarr_profiles=$(arr_get "http://localhost:7878/api/v3/qualityprofile" "$RADARR_API_KEY")
@@ -475,6 +530,7 @@ except: print('Any')
   "activeProfileId": ${radarr_profile_id:-1},
   "activeProfileName": "${radarr_profile_name:-Any}",
   "activeDirectory": "/movies",
+  "minimumAvailability": "released",
   "is4k": false,
   "isDefault": true,
   "enableSeasonFolders": false,
@@ -545,9 +601,20 @@ fi
 # Done
 # ============================================================
 echo ""
-echo "============================================================"
-echo -e " ${GRN}Configuration complete${NC}"
-echo "============================================================"
+if (( ERROR_COUNT > 0 )); then
+    echo "============================================================"
+    echo -e " ${RED}Configuration completed with ${ERROR_COUNT} error(s)${NC}"
+    echo "============================================================"
+    echo ""
+    echo "  Errors:"
+    for e in "${ERRORS[@]}"; do
+        echo -e "   ${RED}✗${NC}  $e"
+    done
+else
+    echo "============================================================"
+    echo -e " ${GRN}Configuration complete${NC}"
+    echo "============================================================"
+fi
 echo ""
 echo "  Still manual (can't be automated):"
 echo "   • Prowlarr → Indexers: add your trackers/indexers"
