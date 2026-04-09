@@ -79,6 +79,44 @@ wait_file() {
     [[ -f "$f" ]]
 }
 
+wait_for_first_boot() {
+    local max="${1:-300}"
+    local interval=4
+    local elapsed=0
+    local config="$STACK_DIR/config"
+
+    local required=(
+        "$config/sonarr/config.xml"
+        "$config/radarr/config.xml"
+        "$config/prowlarr/config.xml"
+    )
+
+    echo -ne "  Waiting for first-boot config files"
+    while (( elapsed < max )); do
+        local pending=()
+        local f
+        for f in "${required[@]}"; do
+            [[ -s "$f" ]] || pending+=("$f")
+        done
+
+        local bazarr_ready=false
+        [[ -s "$config/bazarr/config.yaml" || -s "$config/bazarr/config/config.yaml" ]] && bazarr_ready=true
+
+        if (( ${#pending[@]} == 0 )) && [[ "$bazarr_ready" == true ]]; then
+            echo " ready"
+            return 0
+        fi
+
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+        echo -n "."
+    done
+
+    echo ""
+    skip "Initialization still in progress after ${max}s; continuing and waiting per service"
+    return 1
+}
+
 xml_key()  { grep -oP '(?<=<ApiKey>)[^<]+' "$1" 2>/dev/null | head -1; }
 json_key() { python3 -c "import json; print(json.load(open('$1')).get('main',{}).get('apiKey',''))" 2>/dev/null || jq -r '.main.apiKey // empty' "$1" 2>/dev/null; }
 
@@ -168,8 +206,8 @@ docker compose -f "$STACK_DIR/docker-compose.yml" up -d 2>/dev/null
 ok "All containers started"
 
 echo ""
-info "Giving services 60 seconds to initialize..."
-sleep 60
+info "Waiting for services to initialize (adaptive)..."
+wait_for_first_boot 300 || true
 
 # ============================================================
 # STEP 3 — Extract API keys from *arr config files
