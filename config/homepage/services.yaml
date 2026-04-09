@@ -1,0 +1,102 @@
+---
+# Homepage Services
+# API keys use {{HOMEPAGE_VAR_*}} syntax - injected from docker-compose env
+
+- Media:
+    - Jellyfin:
+        href: http://localhost:8096
+        description: Media Server
+        icon: jellyfin.png
+        widget:
+          type: jellyfin
+          url: http://jellyfin:8096
+          key: "{{HOMEPAGE_VAR_JELLYFIN_KEY}}"
+          enableBlocks: true
+          enableNowPlaying: true
+          expandOneStreamToTwoRows: false
+
+    - Jellyseerr:
+        href: http://localhost:5055
+        description: Media Requests
+        icon: jellyseerr.png
+        widget:
+          type: jellyseerr
+          url: http://jellyseerr:5055
+          key: "{{HOMEPAGE_VAR_JELLYSEERR_KEY}}"
+
+    - Audiobookshelf:
+        href: http://localhost:13378
+        description: Audiobooks & Podcasts
+        icon: audiobookshelf.png
+        widget:
+          type: audiobookshelf
+          url: http://audiobookshelf:80
+          key: "{{HOMEPAGE_VAR_JELLYFIN_KEY}}"
+
+- Downloads:
+    - qBittorrent:
+        href: http://localhost:8080
+        description: Torrent Client
+        icon: qbittorrent.png
+        widget:
+          type: qbittorrent
+          url: http://qbittorrent:8080
+          username: "{{HOMEPAGE_VAR_QBIT_USERNAME}}"
+          password: "{{HOMEPAGE_VAR_QBIT_PASSWORD}}"
+
+    - Prowlarr:
+        href: http://localhost:9696
+        description: Indexer Manager
+        icon: prowlarr.png
+        widget:
+          type: prowlarr
+          url: http://prowlarr:9696
+          key: "{{HOMEPAGE_VAR_PROWLARR_KEY}}"
+
+    - Unpackerr:
+        href: http://localhost:8080
+        description: Archive Extractor
+        icon: unpackerr.png
+
+- Management:
+    - Radarr:
+        href: http://localhost:7878
+        description: Movie Manager
+        icon: radarr.png
+        widget:
+          type: radarr
+          url: http://radarr:7878
+          key: "{{HOMEPAGE_VAR_RADARR_KEY}}"
+
+    - Sonarr:
+        href: http://localhost:8989
+        description: TV Series Manager
+        icon: sonarr.png
+        widget:
+          type: sonarr
+          url: http://sonarr:8989
+          key: "{{HOMEPAGE_VAR_SONARR_KEY}}"
+
+    - Bazarr:
+        href: http://localhost:6767
+        description: Subtitle Manager
+        icon: bazarr.png
+        widget:
+          type: bazarr
+          url: http://bazarr:6767
+          key: "{{HOMEPAGE_VAR_BAZARR_KEY}}"
+
+- Monitoring:
+    - Uptime Kuma:
+        href: http://localhost:3001
+        description: Service Monitor
+        icon: uptime-kuma.png
+        widget:
+          type: uptimekuma
+          url: http://uptime-kuma:3001
+          slug: mediaserver
+
+    - Homepage:
+        href: http://localhost:3000
+        description: This Dashboard
+        icon: homepage.png

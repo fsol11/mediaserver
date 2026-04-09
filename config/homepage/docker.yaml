@@ -1,0 +1,6 @@
+---
+# Homepage Docker Integration
+# Allows Homepage to show container status via Docker socket
+
+my-docker:
+  socket: /var/run/docker.sock

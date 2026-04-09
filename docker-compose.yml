@@ -1,0 +1,340 @@
+# ============================================================
+# Media Server Stack
+# ============================================================
+# Services: qBittorrent, Prowlarr, Radarr, Sonarr, Jellyfin,
+#           Jellyseerr, Bazarr, Recyclarr, Unpackerr,
+#           Homepage, Uptime Kuma, Audiobookshelf, Cloudflared
+#
+# FIRST RUN:
+#   Run: bash install.sh   (does everything automatically)
+# ============================================================
+
+networks:
+  mediaserver:
+    driver: bridge
+
+services:
+
+  # ============================================================
+  # qBittorrent - Torrent Download Client
+  # WebUI: http://localhost:8080  (default: admin / adminadmin)
+  # ============================================================
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - WEBUI_PORT=8080
+    volumes:
+      - ./config/qbittorrent:/config
+      - "${DIR_DOWNLOADS}:/downloads"
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # Prowlarr - Indexer Manager
+  # WebUI: http://localhost:9696
+  # Connects to Radarr & Sonarr automatically via API
+  # ============================================================
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - "9696:9696"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # Radarr - Movie Collection Manager
+  # WebUI: http://localhost:7878
+  # Download client: qbittorrent:8080
+  # Indexers: managed via Prowlarr
+  # ============================================================
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/radarr:/config
+      - "${DIR_MOVIES}:/movies"
+      - "${DIR_DOWNLOADS}:/downloads"
+    ports:
+      - "7878:7878"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # Sonarr - TV Series Collection Manager
+  # WebUI: http://localhost:8989
+  # Download client: qbittorrent:8080
+  # Indexers: managed via Prowlarr
+  # ============================================================
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/sonarr:/config
+      - "${DIR_TV}:/tv"
+      - "${DIR_DOWNLOADS}:/downloads"
+    ports:
+      - "8989:8989"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # Jellyfin - Media Server
+  # WebUI: http://localhost:8096
+  # Libraries: /data/movies and /data/tvshows
+  # ============================================================
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/jellyfin:/config
+      - "${DIR_MOVIES}:/data/movies"
+      - "${DIR_TV}:/data/tvshows"
+      - "${DIR_AUDIOBOOKS}:/data/audiobooks"
+    ports:
+      - "8096:8096"
+      - "8920:8920"
+      - "7359:7359/udp"
+      # Uncomment below if you need DLNA support:
+      # - "1900:1900/udp"
+    # Uncomment for Intel VAAPI hardware transcoding:
+    # devices:
+    #   - /dev/dri:/dev/dri
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # Jellyseerr - Media Request Manager
+  # WebUI: http://localhost:5055
+  # Connects to: Jellyfin, Radarr, Sonarr
+  # ============================================================
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      - TZ=${TZ}
+      - LOG_LEVEL=debug
+    volumes:
+      - ./config/jellyseerr:/app/config
+    ports:
+      - "5055:5055"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+    depends_on:
+      - jellyfin
+      - radarr
+      - sonarr
+
+  # ============================================================
+  # Bazarr - Subtitle Manager
+  # WebUI: http://localhost:6767
+  # Connects to: Radarr (movies) and Sonarr (TV)
+  # ============================================================
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./config/bazarr:/config
+      - "${DIR_MOVIES}:/movies"
+      - "${DIR_TV}:/tv"
+    ports:
+      - "6767:6767"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+    depends_on:
+      - radarr
+      - sonarr
+
+  # ============================================================
+  # Recyclarr - Radarr/Sonarr Quality Profile Sync
+  # No WebUI - runs on a schedule (daily at 03:00)
+  # Config: ./config/recyclarr/recyclarr.yml
+  # Fill in API keys in .env first!
+  # ============================================================
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    user: "${PUID}:${PGID}"
+    environment:
+      - TZ=${TZ}
+      - CRON_SCHEDULE=0 3 * * *
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - RADARR_API_KEY=${RADARR_API_KEY}
+    volumes:
+      - ./config/recyclarr:/config
+    networks:
+      - mediaserver
+    restart: unless-stopped
+    depends_on:
+      - radarr
+      - sonarr
+
+  # ============================================================
+  # Unpackerr - Extracts Completed Downloads
+  # No WebUI - monitors download folder and extracts archives
+  # Notifies Radarr/Sonarr when extraction is complete
+  # Fill in API keys in .env first!
+  # ============================================================
+  unpackerr:
+    image: golift/unpackerr:latest
+    container_name: unpackerr
+    environment:
+      - TZ=${TZ}
+      - UN_DEBUG=false
+      - UN_LOG_FILE=/downloads/unpackerr.log
+      # Sonarr
+      - UN_SONARR_0_URL=http://sonarr:8989
+      - UN_SONARR_0_API_KEY=${SONARR_API_KEY}
+      - UN_SONARR_0_PATHS_0=/downloads
+      - UN_SONARR_0_PROTOCOLS=torrent
+      - UN_SONARR_0_DELETE_ORIG=false
+      - UN_SONARR_0_DELETE_DELAY=5m
+      # Radarr
+      - UN_RADARR_0_URL=http://radarr:7878
+      - UN_RADARR_0_API_KEY=${RADARR_API_KEY}
+      - UN_RADARR_0_PATHS_0=/downloads
+      - UN_RADARR_0_PROTOCOLS=torrent
+      - UN_RADARR_0_DELETE_ORIG=false
+      - UN_RADARR_0_DELETE_DELAY=5m
+    volumes:
+      - "${DIR_DOWNLOADS}:/downloads"
+    networks:
+      - mediaserver
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on:
+      - radarr
+      - sonarr
+      - qbittorrent
+
+  # ============================================================
+  # Homepage - Dashboard
+  # WebUI: http://localhost:3000
+  # Config: ./config/homepage/
+  # ============================================================
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    environment:
+      - TZ=${TZ}
+      - PUID=${PUID}
+      - PGID=${PGID}
+      # Expose API keys to Homepage for widgets
+      - HOMEPAGE_VAR_SONARR_KEY=${SONARR_API_KEY}
+      - HOMEPAGE_VAR_RADARR_KEY=${RADARR_API_KEY}
+      - HOMEPAGE_VAR_PROWLARR_KEY=${PROWLARR_API_KEY}
+      - HOMEPAGE_VAR_BAZARR_KEY=${BAZARR_API_KEY}
+      - HOMEPAGE_VAR_JELLYFIN_KEY=${JELLYFIN_API_KEY}
+      - HOMEPAGE_VAR_JELLYSEERR_KEY=${JELLYSEERR_API_KEY}
+      - HOMEPAGE_VAR_QBIT_USERNAME=${QBIT_USERNAME}
+      - HOMEPAGE_VAR_QBIT_PASSWORD=${QBIT_PASSWORD}
+      - HOMEPAGE_VAR_DATA_ROOT=${DATA_ROOT}
+    volumes:
+      - ./config/homepage:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # Uptime Kuma - Service Health Monitor
+  # WebUI: http://localhost:3001
+  # ============================================================
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    volumes:
+      - ./config/uptime-kuma:/app/data
+    ports:
+      - "3001:3001"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # Audiobookshelf - Audiobook & Podcast Server
+  # WebUI: http://localhost:13378
+  # Libraries: ${DIR_AUDIOBOOKS}
+  # ============================================================
+  audiobookshelf:
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    container_name: audiobookshelf
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./config/audiobookshelf:/config
+      - ./config/audiobookshelf/metadata:/metadata
+      - "${DIR_AUDIOBOOKS}:/audiobooks"
+    ports:
+      - "13378:80"
+    networks:
+      - mediaserver
+    restart: unless-stopped
+
+  # ============================================================
+  # Cloudflared - Cloudflare Tunnel
+  # No WebUI - manages outbound tunnel to Cloudflare edge
+  # Public hostnames are configured in Zero Trust dashboard:
+  #   https://one.dash.cloudflare.com → Networks → Tunnels
+  #
+  # IMPORTANT: Set CLOUDFLARE_TUNNEL_TOKEN in .env first.
+  # See CLOUDFLARE_SETUP.md for full setup guide.
+  #
+  # Because cloudflared opens an outbound connection to Cloudflare,
+  # NO inbound ports need to be opened on your router/firewall.
+  # ============================================================
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - mediaserver
+    restart: unless-stopped
+    depends_on:
+      - jellyfin
+      - jellyseerr
+      - homepage
+      - audiobookshelf
+      - uptime-kuma

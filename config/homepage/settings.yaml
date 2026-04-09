@@ -1,0 +1,43 @@
+---
+# Homepage Settings
+# Docs: https://gethomepage.dev/configs/settings/
+
+title: Media Server
+description: My Personal Media Server
+
+theme: dark
+color: slate
+
+headerStyle: boxed
+
+# Show a background image
+background:
+  blur: sm
+  saturate: 50
+  brightness: 50
+  opacity: 50
+
+# Language
+language: en
+
+# Log level
+logpath: /app/config/logs
+log_level: warn
+
+layout:
+  Media:
+    header: true
+    style: row
+    columns: 3
+  Downloads:
+    header: true
+    style: row
+    columns: 3
+  Management:
+    header: true
+    style: row
+    columns: 3
+  Monitoring:
+    header: true
+    style: row
+    columns: 2

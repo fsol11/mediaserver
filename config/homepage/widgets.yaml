@@ -1,0 +1,31 @@
+---
+# Homepage Widgets (top bar)
+
+- search:
+    provider: google
+    target: _blank
+    focus: false
+
+- greeting:
+    text_size: xl
+    text: "Media Server"
+
+- datetime:
+    text_size: xl
+    format:
+      timeStyle: short
+      dateStyle: short
+      hourCycle: h23
+
+- resources:
+    backend: resources
+    cpu: true
+    memory: true
+    disk: /
+    label: System
+
+- resources:
+    backend: resources
+    disk: "{{HOMEPAGE_VAR_DATA_ROOT}}"
+    label: DATA Drive
+    expanded: true

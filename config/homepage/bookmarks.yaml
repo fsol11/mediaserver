@@ -1,0 +1,16 @@
+---
+# Homepage Bookmarks (quick links)
+
+- Quick Links:
+    - TRaSH Guides:
+        - abbr: TG
+          href: https://trash-guides.info/
+    - Radarr Docs:
+        - abbr: RD
+          href: https://wiki.servarr.com/radarr
+    - Sonarr Docs:
+        - abbr: SD
+          href: https://wiki.servarr.com/sonarr
+    - Prowlarr Docs:
+        - abbr: PD
+          href: https://wiki.servarr.com/prowlarr
