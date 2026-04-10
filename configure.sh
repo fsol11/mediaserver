@@ -554,6 +554,44 @@ JSON
         || fail "Failed to connect Sonarr (HTTP $(code "$resp")): $(body "$resp")"
 fi
 
+# ── Subtitle Providers ──────────────────────────────────────
+if [[ -n "${BAZARR_PROVIDERS:-}" ]]; then
+    BAZARR_CFG="$STACK_DIR/config/bazarr/config/config.yaml"
+    if [[ ! -f "$BAZARR_CFG" ]]; then
+        BAZARR_CFG="$STACK_DIR/config/bazarr/config.yaml"
+    fi
+    if [[ -f "$BAZARR_CFG" ]]; then
+        # Read current providers from config
+        current_providers=$(grep -A50 'enabled_providers:' "$BAZARR_CFG" \
+            | tail -n+2 | sed -n '/^  - /{ s/^  - //; p; }; /^  [a-z]/q')
+        # Build desired list from .env
+        IFS=',' read -ra DESIRED_PROVS <<< "$BAZARR_PROVIDERS"
+        desired_yaml=""
+        for p in "${DESIRED_PROVS[@]}"; do
+            p=$(echo "$p" | xargs)   # trim whitespace
+            desired_yaml+="\n  - $p"
+        done
+        # Compare sorted lists
+        current_sorted=$(echo "$current_providers" | sort)
+        desired_sorted=$(printf '%s\n' "${DESIRED_PROVS[@]}" | xargs -n1 | sort)
+        if [[ "$current_sorted" == "$desired_sorted" ]]; then
+            skip "Subtitle providers already configured"
+        else
+            # Replace enabled_providers block in config YAML
+            # Remove old list items, then insert new ones
+            sed -i '/  enabled_providers:/,/^  [a-z]/{/  enabled_providers:/!{/^  [a-z]/!d}}' "$BAZARR_CFG"
+            sed -i "s/  enabled_providers:.*/  enabled_providers:$desired_yaml/" "$BAZARR_CFG"
+            # Restart Bazarr to pick up config changes (API ignores enabled_providers writes)
+            docker restart bazarr &>/dev/null
+            ok "Subtitle providers set: ${BAZARR_PROVIDERS}"
+        fi
+    else
+        fail "Bazarr config file not found — cannot set providers"
+    fi
+else
+    skip "BAZARR_PROVIDERS not set in .env — skipping provider setup"
+fi
+
 # ============================================================
 # 7. JELLYSEERR — Add Radarr + Sonarr
 #    (only runs if wizard is complete and API key is set)
@@ -729,8 +767,6 @@ else
 fi
 echo ""
 echo "  Still manual (can't be automated):"
-
-echo "   • Bazarr → Settings → Subtitles: add providers"
 echo "   • Uptime Kuma → create account and add monitors"
 echo "   • Audiobookshelf → create admin account"
 echo ""
