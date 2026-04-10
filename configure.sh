@@ -128,6 +128,9 @@ wait_http "http://localhost:8989/api/v3/system/status?apikey=${SONARR_API_KEY}" 
 wait_http "http://localhost:9696/api/v1/system/status?apikey=${PROWLARR_API_KEY}" "Prowlarr"     120 || die "Prowlarr not responding"
 wait_http "http://localhost:6767/api/system/status?apikey=${BAZARR_API_KEY}" "Bazarr" 120 || fail "Bazarr not responding — skipping its config"
 wait_http "http://localhost:8191"           "FlareSolverr" 60 || fail "FlareSolverr not responding — indexers behind Cloudflare may not work"
+if ! is_placeholder "JELLYSEERR_API_KEY"; then
+    wait_http "http://localhost:5055/api/v1/settings/public" "Jellyseerr" 120 || fail "Jellyseerr not responding — skipping its config"
+fi
 
 # ============================================================
 # 2. QBITTORRENT — Set default save path and credentials
@@ -1278,7 +1281,7 @@ print(json.dumps(d))")
 fi
 
 # ── Jellyseerr: original-language content filter ─────────────────
-if ! is_placeholder "JELLYSEERR_API_KEY"; then
+if ! is_placeholder "JELLYSEERR_API_KEY" && curl -sf "http://localhost:5055/api/v1/settings/public" -H "X-Api-Key: $JELLYSEERR_API_KEY" &>/dev/null; then
     JS_BASE="http://localhost:5055"
     main_resp=$(http GET "$JS_BASE/api/v1/settings/main" -H "X-Api-Key: $JELLYSEERR_API_KEY")
     main_body=$(body "$main_resp")

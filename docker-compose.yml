@@ -144,13 +144,14 @@ services:
     restart: unless-stopped
 
   # ============================================================
-  # Jellyseerr - Media Request Manager
+  # Seerr (formerly Jellyseerr) - Media Request Manager
   # WebUI: http://localhost:5055
   # Connects to: Jellyfin, Radarr, Sonarr
   # ============================================================
   jellyseerr:
-    image: fallenbagel/jellyseerr:latest
+    image: ghcr.io/seerr-team/seerr:latest
     container_name: jellyseerr
+    init: true
     environment:
       - TZ=${TZ}
       - LOG_LEVEL=debug

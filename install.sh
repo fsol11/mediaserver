@@ -380,11 +380,14 @@ done
 mkdir -p "$STACK_DIR/config/"{qbittorrent,prowlarr,radarr,sonarr,jellyfin,jellyseerr,bazarr,recyclarr,homepage,uptime-kuma,audiobookshelf/metadata}
 ok "Config directories created"
 
-# Permissions
-chown -R 1000:1000 "$STACK_DIR/config" \
-    "$DIR_DOWNLOADS" "$DIR_MOVIES" \
-    "$DIR_AUDIOBOOKS" 2>/dev/null || true
-chown -R 1000:1000 "$DIR_TV" 2>/dev/null || true
+# Permissions — use Docker to chown so this works without sudo
+docker run --rm \
+    -v "$STACK_DIR/config":/seerr_config \
+    -v "$DIR_DOWNLOADS":/dl \
+    -v "$DIR_MOVIES":/movies \
+    -v "$DIR_AUDIOBOOKS":/audiobooks \
+    alpine sh -c 'chown -R 1000:1000 /seerr_config /dl /movies /audiobooks' 2>/dev/null || true
+docker run --rm -v "$DIR_TV":/tv alpine chown -R 1000:1000 /tv 2>/dev/null || true
 ok "Permissions set"
 
 # Enable Docker at boot
