@@ -24,10 +24,29 @@ from your server to Cloudflare's edge. No port forwarding or open firewall rules
    cloudflared service install eyJhIjoiABC...
    ```
    The token is the long string after `service install`
-6. Paste it into `install.env`:
+6. Paste it into `.env`:
    ```
    CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoiABC...
    ```
+
+## Automated Setup (Recommended)
+
+If you set all three Cloudflare variables in `.env`, `configure.sh` will automatically
+create the tunnel hostnames and DNS records for you — no manual dashboard steps needed:
+
+```
+CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoiABC...
+CF_DOMAIN=example.com
+CF_API_TOKEN=<your-api-token>
+```
+
+Create the API token at https://dash.cloudflare.com/profile/api-tokens with permissions:
+- **Account → Cloudflare Tunnel → Edit**
+- **Zone → DNS → Edit** (for your domain's zone)
+
+Then run `bash configure.sh` — it handles Step 2 and Step 3 below automatically.
+
+---
 7. Click **Next** — you'll configure hostnames in Step 3
 
 ---

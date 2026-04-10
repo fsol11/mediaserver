@@ -11,6 +11,11 @@
 
 set -uo pipefail
 
+# ── Re-exec with docker group if not active ────────────────
+if ! docker info >/dev/null 2>&1 && getent group docker | grep -q "\b$(whoami)\b"; then
+    exec sg docker -c "bash \"$0\" $*"
+fi
+
 ERROR_COUNT=0
 ERRORS=()
 
@@ -1178,6 +1183,163 @@ else
         fi
     elif ! is_placeholder "AUDIOBOOKSHELF_API_KEY"; then
         skip "AUDIOBOOKSHELF_API_KEY already set"
+    fi
+fi
+
+# ============================================================
+# 12. CLOUDFLARE TUNNEL — Configure public hostnames
+# ============================================================
+section "Cloudflare Tunnel"
+
+if [[ -z "${CLOUDFLARE_TUNNEL_TOKEN:-}" || -z "${CF_API_TOKEN:-}" || -z "${CF_DOMAIN:-}" ]]; then
+    skip "Skipping — set CLOUDFLARE_TUNNEL_TOKEN, CF_API_TOKEN, and CF_DOMAIN in .env"
+else
+    # Decode account_id and tunnel_id from the tunnel token (base64 JSON: {"a":..., "t":..., "s":...})
+    CF_TOKEN_JSON=$(echo "$CLOUDFLARE_TUNNEL_TOKEN" | base64 -d 2>/dev/null) || CF_TOKEN_JSON=""
+    CF_ACCOUNT_ID=$(echo "$CF_TOKEN_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['a'])" 2>/dev/null)
+    CF_TUNNEL_ID=$(echo "$CF_TOKEN_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['t'])" 2>/dev/null)
+
+    if [[ -z "$CF_ACCOUNT_ID" || -z "$CF_TUNNEL_ID" ]]; then
+        fail "Could not decode account/tunnel ID from CLOUDFLARE_TUNNEL_TOKEN"
+    else
+        CF_API="https://api.cloudflare.com/client/v4"
+        cf_headers=(-H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json")
+
+        # Build ingress rules — order: specific hostnames first, catch-all last
+        INGRESS=$(cat <<ENDJSON
+[
+  {"hostname": "jellyfin.${CF_DOMAIN}",  "service": "http://jellyfin:8096"},
+  {"hostname": "requests.${CF_DOMAIN}",  "service": "http://jellyseerr:5055"},
+  {"hostname": "books.${CF_DOMAIN}",     "service": "http://audiobookshelf:80"},
+  {"hostname": "homepage.${CF_DOMAIN}",  "service": "http://homepage:3000"},
+  {"hostname": "status.${CF_DOMAIN}",    "service": "http://uptime-kuma:3001"},
+  {"hostname": "radarr.${CF_DOMAIN}",    "service": "http://radarr:7878"},
+  {"hostname": "sonarr.${CF_DOMAIN}",    "service": "http://sonarr:8989"},
+  {"hostname": "prowlarr.${CF_DOMAIN}",  "service": "http://prowlarr:9696"},
+  {"hostname": "qbit.${CF_DOMAIN}",      "service": "http://qbittorrent:8080"},
+  {"hostname": "bazarr.${CF_DOMAIN}",    "service": "http://bazarr:6767"},
+  {"service": "http_status:404"}
+]
+ENDJSON
+)
+
+        PAYLOAD=$(python3 -c "
+import json, sys
+ingress = json.loads(sys.argv[1])
+print(json.dumps({'config': {'ingress': ingress}}))
+" "$INGRESS")
+
+        # Fetch current config to check if update is needed
+        CURRENT=$(curl -s "${cf_headers[@]}" \
+            "$CF_API/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/configurations" 2>/dev/null)
+        CURRENT_SUCCESS=$(echo "$CURRENT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success', False))" 2>/dev/null)
+
+        if [[ "$CURRENT_SUCCESS" == "True" ]]; then
+            # Compare current ingress hostnames with desired
+            CURRENT_HOSTS=$(echo "$CURRENT" | python3 -c "
+import json, sys
+cfg = json.load(sys.stdin)
+ingress = cfg.get('result', {}).get('config', {}).get('ingress', [])
+hosts = sorted([r.get('hostname','') for r in ingress if r.get('hostname')])
+print(','.join(hosts))
+" 2>/dev/null)
+            DESIRED_HOSTS=$(echo "$INGRESS" | python3 -c "
+import json, sys
+ingress = json.load(sys.stdin)
+hosts = sorted([r.get('hostname','') for r in ingress if r.get('hostname')])
+print(','.join(hosts))
+" 2>/dev/null)
+
+            if [[ "$CURRENT_HOSTS" == "$DESIRED_HOSTS" ]]; then
+                ok "Tunnel hostnames already configured (${CF_DOMAIN})"
+            else
+                # Apply the configuration
+                RESP=$(curl -s -X PUT "${cf_headers[@]}" \
+                    "$CF_API/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/configurations" \
+                    -d "$PAYLOAD" 2>/dev/null)
+                RESP_OK=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success', False))" 2>/dev/null)
+                if [[ "$RESP_OK" == "True" ]]; then
+                    ok "Tunnel hostnames configured for ${CF_DOMAIN}"
+                else
+                    RESP_ERR=$(echo "$RESP" | python3 -c "
+import json, sys
+errors = json.load(sys.stdin).get('errors', [])
+print('; '.join(e.get('message','') for e in errors) if errors else 'unknown error')
+" 2>/dev/null)
+                    fail "Cloudflare API error: $RESP_ERR"
+                fi
+            fi
+        else
+            # Can't read current config — just apply
+            RESP=$(curl -s -X PUT "${cf_headers[@]}" \
+                "$CF_API/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/configurations" \
+                -d "$PAYLOAD" 2>/dev/null)
+            RESP_OK=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success', False))" 2>/dev/null)
+            if [[ "$RESP_OK" == "True" ]]; then
+                ok "Tunnel hostnames configured for ${CF_DOMAIN}"
+            else
+                RESP_ERR=$(echo "$RESP" | python3 -c "
+import json, sys
+errors = json.load(sys.stdin).get('errors', [])
+print('; '.join(e.get('message','') for e in errors) if errors else 'unknown error')
+" 2>/dev/null)
+                fail "Cloudflare API error: $RESP_ERR"
+            fi
+        fi
+
+        # Create DNS CNAME records for each subdomain → tunnel
+        CF_TUNNEL_CNAME="${CF_TUNNEL_ID}.cfargotunnel.com"
+
+        # Get zone ID for the domain
+        ZONE_RESP=$(curl -s "${cf_headers[@]}" \
+            "$CF_API/zones?name=${CF_DOMAIN}" 2>/dev/null)
+        CF_ZONE_ID=$(echo "$ZONE_RESP" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+zones = data.get('result', [])
+print(zones[0]['id'] if zones else '')
+" 2>/dev/null)
+
+        if [[ -z "$CF_ZONE_ID" ]]; then
+            fail "Could not find Cloudflare zone for ${CF_DOMAIN} — check CF_API_TOKEN permissions"
+        else
+            SUBDOMAINS=(jellyfin requests books homepage status radarr sonarr prowlarr qbit bazarr)
+            DNS_CREATED=0
+            DNS_EXISTED=0
+
+            for SUB in "${SUBDOMAINS[@]}"; do
+                FQDN="${SUB}.${CF_DOMAIN}"
+
+                # Check if record already exists
+                EXISTING=$(curl -s "${cf_headers[@]}" \
+                    "$CF_API/zones/$CF_ZONE_ID/dns_records?type=CNAME&name=${FQDN}" 2>/dev/null)
+                EXISTING_COUNT=$(echo "$EXISTING" | python3 -c "
+import json, sys
+print(len(json.load(sys.stdin).get('result', [])))
+" 2>/dev/null)
+
+                if [[ "$EXISTING_COUNT" -gt 0 ]]; then
+                    DNS_EXISTED=$((DNS_EXISTED + 1))
+                else
+                    DNS_CREATE_RESP=$(curl -s -X POST "${cf_headers[@]}" \
+                        "$CF_API/zones/$CF_ZONE_ID/dns_records" \
+                        -d "{\"type\":\"CNAME\",\"name\":\"${SUB}\",\"content\":\"${CF_TUNNEL_CNAME}\",\"proxied\":true}" 2>/dev/null)
+                    DNS_OK=$(echo "$DNS_CREATE_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('success', False))" 2>/dev/null)
+                    if [[ "$DNS_OK" == "True" ]]; then
+                        DNS_CREATED=$((DNS_CREATED + 1))
+                    else
+                        fail "Failed to create DNS record for ${FQDN}"
+                    fi
+                fi
+            done
+
+            if [[ $DNS_CREATED -gt 0 ]]; then
+                ok "Created ${DNS_CREATED} DNS CNAME record(s)"
+            fi
+            if [[ $DNS_EXISTED -gt 0 ]]; then
+                ok "${DNS_EXISTED} DNS record(s) already exist"
+            fi
+        fi
     fi
 fi
 
