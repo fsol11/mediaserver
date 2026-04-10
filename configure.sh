@@ -926,6 +926,121 @@ with open(sys.argv[1], 'w') as f:
 fi
 
 # ============================================================
+# 8b. JELLYFIN — Transcoding (NVIDIA GPU + 8 Mbps remote bitrate)
+#     If NVIDIA GPU is present in the container, enable NVENC
+#     hardware transcoding and set remote bitrate limit to 8 Mbps.
+# ============================================================
+section "Jellyfin Transcoding"
+
+if is_placeholder "JELLYFIN_API_KEY"; then
+    skip "JELLYFIN_API_KEY not set — skipping transcoding config"
+else
+    JF_BASE="http://localhost:8096"
+    JF_AUTH="Authorization: MediaBrowser Token=\"${JELLYFIN_API_KEY}\""
+    JF_ENCODING_XML="$STACK_DIR/config/jellyfin/encoding.xml"
+
+    # Check if NVIDIA GPU is accessible inside the Jellyfin container
+    HAS_NVIDIA=false
+    if docker exec jellyfin test -e /dev/nvidia0 2>/dev/null; then
+        HAS_NVIDIA=true
+    fi
+
+    if [[ "$HAS_NVIDIA" == true ]]; then
+        if [[ ! -f "$JF_ENCODING_XML" ]]; then
+            fail "encoding.xml not found — skipping"
+        else
+            encoding_changed=false
+
+            # Desired state for NVIDIA NVENC transcoding
+            declare -A ENCODING_SETTINGS=(
+                [HardwareAccelerationType]="nvenc"
+                [EnableHardwareEncoding]="true"
+                [EnableEnhancedNvdecDecoder]="true"
+                [PreferSystemNativeHwDecoder]="true"
+                [EnableDecodingColorDepth10Hevc]="true"
+                [EnableDecodingColorDepth10Vp9]="true"
+                [AllowHevcEncoding]="true"
+            )
+
+            for key in "${!ENCODING_SETTINGS[@]}"; do
+                desired="${ENCODING_SETTINGS[$key]}"
+                current=$(grep -oP "(?<=<${key}>)[^<]+" "$JF_ENCODING_XML" 2>/dev/null || echo "")
+                if [[ "$current" != "$desired" ]]; then
+                    sed -i "s|<${key}>[^<]*</${key}>|<${key}>${desired}</${key}>|" "$JF_ENCODING_XML"
+                    encoding_changed=true
+                fi
+            done
+
+            # Ensure all common codecs are in HardwareDecodingCodecs
+            DESIRED_CODECS=("h264" "hevc" "mpeg2video" "mpeg4" "vc1" "vp8" "vp9" "av1")
+            current_codecs=$(sed -n '/<HardwareDecodingCodecs>/,/<\/HardwareDecodingCodecs>/p' "$JF_ENCODING_XML" \
+                | grep -oP '(?<=<string>)[^<]+' | sort | tr '\n' '|')
+            desired_codecs=$(printf '%s\n' "${DESIRED_CODECS[@]}" | sort | tr '\n' '|')
+
+            if [[ "$current_codecs" != "$desired_codecs" ]]; then
+                codec_block="  <HardwareDecodingCodecs>"
+                for c in "${DESIRED_CODECS[@]}"; do
+                    codec_block+="\n    <string>${c}</string>"
+                done
+                codec_block+="\n  </HardwareDecodingCodecs>"
+
+                python3 -c "
+import re, sys
+with open(sys.argv[1], 'r') as f:
+    content = f.read()
+content = re.sub(
+    r'  <HardwareDecodingCodecs>.*?</HardwareDecodingCodecs>',
+    sys.argv[2], content, flags=re.DOTALL)
+with open(sys.argv[1], 'w') as f:
+    f.write(content)
+" "$JF_ENCODING_XML" "$(echo -e "$codec_block")"
+                encoding_changed=true
+            fi
+
+            if [[ "$encoding_changed" == true ]]; then
+                ok "NVENC hardware transcoding enabled (all codecs)"
+            else
+                skip "NVENC transcoding already configured"
+            fi
+        fi
+    else
+        skip "No NVIDIA GPU in Jellyfin container — skipping hardware transcoding"
+    fi
+
+    # Set server-wide remote client bitrate limit to 8 Mbps
+    DESIRED_BITRATE=8000000
+    current_config=$(curl -sf "$JF_BASE/System/Configuration" -H "$JF_AUTH" 2>/dev/null)
+    current_bitrate=$(echo "$current_config" | python3 -c "import json,sys; print(json.load(sys.stdin).get('RemoteClientBitrateLimit',0))" 2>/dev/null || echo "0")
+
+    if [[ "$current_bitrate" == "$DESIRED_BITRATE" ]]; then
+        skip "Remote client bitrate limit already 8 Mbps"
+    else
+        # Update the config via API
+        updated_config=$(echo "$current_config" | python3 -c "
+import json, sys
+cfg = json.load(sys.stdin)
+cfg['RemoteClientBitrateLimit'] = $DESIRED_BITRATE
+json.dump(cfg, sys.stdout)
+")
+        resp=$(curl -sf -X POST "$JF_BASE/System/Configuration" \
+            -H "$JF_AUTH" \
+            -H "Content-Type: application/json" \
+            -d "$updated_config" -w "\n%{http_code}" 2>/dev/null)
+        if [[ "$(echo "$resp" | tail -1)" == "204" || "$(echo "$resp" | tail -1)" == "200" ]]; then
+            ok "Remote client bitrate limit set to 8 Mbps"
+        else
+            fail "Failed to set remote bitrate limit (HTTP $(echo "$resp" | tail -1))"
+        fi
+    fi
+
+    # Restart Jellyfin if encoding settings changed
+    if [[ "${encoding_changed:-false}" == true ]]; then
+        docker restart jellyfin &>/dev/null
+        ok "Jellyfin restarted to apply transcoding changes"
+    fi
+fi
+
+# ============================================================
 # 9. RECYCLARR — Trigger initial sync
 # ============================================================
 section "Recyclarr"
