@@ -837,7 +837,96 @@ JSON
 fi
 
 # ============================================================
-# 8. RECYCLARR — Trigger initial sync
+# 8. JELLYFIN — Network config (Cloudflare tunnel awareness)
+#    Ensures tunnel requests are treated as remote (for transcoding)
+# ============================================================
+section "Jellyfin Network"
+
+if [[ -z "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+    skip "No Cloudflare tunnel configured — skipping network tuning"
+elif is_placeholder "JELLYFIN_API_KEY"; then
+    skip "JELLYFIN_API_KEY not set — skipping Jellyfin network config"
+else
+    JF_BASE="http://localhost:8096"
+    JF_AUTH="Authorization: MediaBrowser Token=\"${JELLYFIN_API_KEY}\""
+
+    # Detect LAN subnet from default gateway
+    LAN_SUBNET=$(ip -4 route show default 2>/dev/null \
+        | awk '{print $3}' \
+        | sed 's/\.[0-9]*$/.0\/24/' \
+        | head -1)
+    [[ -z "$LAN_SUBNET" ]] && LAN_SUBNET="192.168.1.0/24"
+
+    # Detect Docker network subnet for the mediaserver stack
+    DOCKER_SUBNET=$(docker network inspect mediaserver_mediaserver 2>/dev/null \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['IPAM']['Config'][0]['Subnet'])" 2>/dev/null)
+    [[ -z "$DOCKER_SUBNET" ]] && DOCKER_SUBNET="172.18.0.0/16"
+
+    JF_NETWORK_XML="$STACK_DIR/config/jellyfin/network.xml"
+    if [[ ! -f "$JF_NETWORK_XML" ]]; then
+        fail "Jellyfin network.xml not found"
+    else
+        # Check current LocalNetworkSubnets
+        current_local=$(grep -oP '(?<=<string>)[^<]+' <<< "$(sed -n '/<LocalNetworkSubnets>/,/<\/LocalNetworkSubnets>/p' "$JF_NETWORK_XML")" | sort | tr '\n' '|')
+        desired_local=$(printf '%s\n' "$LAN_SUBNET" "127.0.0.1/8" | sort | tr '\n' '|')
+
+        current_proxy=$(grep -oP '(?<=<string>)[^<]+' <<< "$(sed -n '/<KnownProxies>/,/<\/KnownProxies>/p' "$JF_NETWORK_XML")" | sort | tr '\n' '|')
+        desired_proxy=$(printf '%s\n' "$DOCKER_SUBNET" | sort | tr '\n' '|')
+
+        needs_restart=false
+
+        if [[ "$current_local" == "$desired_local" ]]; then
+            skip "LocalNetworkSubnets already set ($LAN_SUBNET, 127.0.0.1/8)"
+        else
+            # Replace LocalNetworkSubnets block
+            python3 -c "
+import re, sys
+with open(sys.argv[1], 'r') as f:
+    content = f.read()
+new_block = '''  <LocalNetworkSubnets>
+    <string>${LAN_SUBNET}</string>
+    <string>127.0.0.1/8</string>
+  </LocalNetworkSubnets>'''
+content = re.sub(
+    r'  <LocalNetworkSubnets>.*?</LocalNetworkSubnets>',
+    new_block, content, flags=re.DOTALL)
+with open(sys.argv[1], 'w') as f:
+    f.write(content)
+" "$JF_NETWORK_XML"
+            ok "LocalNetworkSubnets set to $LAN_SUBNET + 127.0.0.1/8"
+            needs_restart=true
+        fi
+
+        if [[ "$current_proxy" == "$desired_proxy" ]]; then
+            skip "KnownProxies already set ($DOCKER_SUBNET)"
+        else
+            # Replace KnownProxies block
+            python3 -c "
+import re, sys
+with open(sys.argv[1], 'r') as f:
+    content = f.read()
+new_block = '''  <KnownProxies>
+    <string>${DOCKER_SUBNET}</string>
+  </KnownProxies>'''
+content = re.sub(
+    r'  <KnownProxies>.*?</KnownProxies>',
+    new_block, content, flags=re.DOTALL)
+with open(sys.argv[1], 'w') as f:
+    f.write(content)
+" "$JF_NETWORK_XML"
+            ok "KnownProxies set to $DOCKER_SUBNET"
+            needs_restart=true
+        fi
+
+        if [[ "$needs_restart" == true ]]; then
+            docker restart jellyfin &>/dev/null
+            ok "Jellyfin restarted to apply network changes"
+        fi
+    fi
+fi
+
+# ============================================================
+# 9. RECYCLARR — Trigger initial sync
 # ============================================================
 section "Recyclarr"
 
@@ -851,7 +940,7 @@ else
 fi
 
 # ============================================================
-# 9. UPTIME KUMA — Create account + add monitors
+# 10. UPTIME KUMA — Create account + add monitors
 # ============================================================
 section "Uptime Kuma"
 
@@ -933,7 +1022,7 @@ else
 fi
 
 # ============================================================
-# 10. AUDIOBOOKSHELF — Create admin account
+# 11. AUDIOBOOKSHELF — Create admin account
 # ============================================================
 section "Audiobookshelf"
 
