@@ -537,11 +537,28 @@ if [[ -n "$JF_AUTH" ]]; then
 
     _add_library() {
         local name="$1" type="$2" path="$3"
-        if echo "$existing_libs" | python3 -c "
+        local lib_status
+        lib_status=$(echo "$existing_libs" | python3 -c "
 import json,sys
 libs=json.load(sys.stdin)
-sys.exit(0 if any(l['Name']=='${name}' for l in libs) else 1)" 2>/dev/null; then
-            skip "Library '${name}' already exists"
+match=[l for l in libs if l['Name']=='${name}']
+if not match:
+    print('missing')
+elif any('${path}' in loc for loc in match[0].get('Locations',[])):
+    print('ok')
+else:
+    print('no_path')
+" 2>/dev/null)
+
+        if [[ "$lib_status" == "ok" ]]; then
+            skip "Library '${name}' already configured (${path})"
+        elif [[ "$lib_status" == "no_path" ]]; then
+            # Library exists but has no folder path — add it
+            resp=$(http POST "$JF_BASE/Library/VirtualFolders/Paths" \
+                -H "$JF_AUTH" -H "Content-Type: application/json" \
+                -d "{\"Name\":\"${name}\",\"PathInfo\":{\"Path\":\"${path}\"}}")
+            ok_code "$resp" && ok "Path '${path}' added to existing library '${name}'" \
+                || fail "Failed to add path to '${name}' library (HTTP $(code "$resp")): $(body "$resp")"
         else
             resp=$(http POST "$JF_BASE/Library/VirtualFolders" \
                 -H "$JF_AUTH" -H "Content-Type: application/json" \
@@ -558,6 +575,19 @@ sys.exit(0 if any(l['Name']=='${name}' for l in libs) else 1)" 2>/dev/null; then
     _add_library "Movies"     "movies"  "/data/movies"
     _add_library "TV Shows"   "tvshows" "/data/tvshows"
     _add_library "Audiobooks" "books"   "/data/audiobooks"
+
+    # ── FFmpeg path ────────────────────────────────────────────
+    ffmpeg_set=$(curl -sf "$JF_BASE/System/Configuration/encoding" -H "$JF_AUTH" 2>/dev/null \
+        | python3 -c "import json,sys; print(json.load(sys.stdin).get('EncoderAppPath',''))" 2>/dev/null)
+    if [[ -n "$ffmpeg_set" ]]; then
+        skip "FFmpeg path already configured"
+    else
+        resp=$(http POST "$JF_BASE/System/MediaEncoder/Path" \
+            -H "$JF_AUTH" -H "Content-Type: application/json" \
+            -d '{"Path":"/usr/lib/jellyfin-ffmpeg/ffmpeg","PathType":"Custom"}')
+        ok_code "$resp" && ok "FFmpeg path set (/usr/lib/jellyfin-ffmpeg/ffmpeg)" \
+            || fail "Failed to set FFmpeg path (HTTP $(code "$resp"))"
+    fi
 
     if is_placeholder "JELLYFIN_API_KEY"; then
         key_resp=$(http POST "$JF_BASE/Auth/Keys?app=MediaServer" -H "$JF_AUTH")
