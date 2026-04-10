@@ -278,6 +278,7 @@ services:
       - HOMEPAGE_VAR_QBIT_USERNAME=${ADMIN_USER}
       - HOMEPAGE_VAR_QBIT_PASSWORD=${ADMIN_PASSWORD}
       - HOMEPAGE_VAR_DATA_ROOT=${DATA_ROOT}
+      - HOMEPAGE_VAR_CF_DOMAIN=${CF_DOMAIN}
     volumes:
       - ./config/homepage:/app/config
       - /var/run/docker.sock:/var/run/docker.sock:ro

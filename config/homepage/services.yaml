@@ -1,10 +1,11 @@
 ---
 # Homepage Services
 # API keys use {{HOMEPAGE_VAR_*}} syntax - injected from docker-compose env
+# hrefs use CF subdomains so links work from any remote browser
 
 - Media:
     - Jellyfin:
-        href: http://localhost:8096
+        href: https://jellyfin.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Media Server
         icon: jellyfin.png
         widget:
@@ -16,7 +17,7 @@
           expandOneStreamToTwoRows: false
 
     - Jellyseerr:
-        href: http://localhost:5055
+        href: https://requests.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Media Requests
         icon: jellyseerr.png
         widget:
@@ -25,7 +26,7 @@
           key: "{{HOMEPAGE_VAR_JELLYSEERR_KEY}}"
 
     - Audiobookshelf:
-        href: http://localhost:13378
+        href: https://books.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Audiobooks & Podcasts
         icon: audiobookshelf.png
         widget:
@@ -35,7 +36,7 @@
 
 - Downloads:
     - qBittorrent:
-        href: http://localhost:8080
+        href: https://qbit.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Torrent Client
         icon: qbittorrent.png
         widget:
@@ -45,7 +46,7 @@
           password: "{{HOMEPAGE_VAR_QBIT_PASSWORD}}"
 
     - Prowlarr:
-        href: http://localhost:9696
+        href: https://prowlarr.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Indexer Manager
         icon: prowlarr.png
         widget:
@@ -54,13 +55,13 @@
           key: "{{HOMEPAGE_VAR_PROWLARR_KEY}}"
 
     - Unpackerr:
-        href: http://localhost:8080
+        href: https://qbit.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Archive Extractor
         icon: unpackerr.png
 
 - Management:
     - Radarr:
-        href: http://localhost:7878
+        href: https://radarr.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Movie Manager
         icon: radarr.png
         widget:
@@ -69,7 +70,7 @@
           key: "{{HOMEPAGE_VAR_RADARR_KEY}}"
 
     - Sonarr:
-        href: http://localhost:8989
+        href: https://sonarr.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: TV Series Manager
         icon: sonarr.png
         widget:
@@ -78,7 +79,7 @@
           key: "{{HOMEPAGE_VAR_SONARR_KEY}}"
 
     - Bazarr:
-        href: http://localhost:6767
+        href: https://bazarr.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Subtitle Manager
         icon: bazarr.png
         widget:
@@ -88,7 +89,7 @@
 
 - Monitoring:
     - Uptime Kuma:
-        href: http://localhost:3001
+        href: https://status.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Service Monitor
         icon: uptime-kuma.png
         widget:
@@ -97,6 +98,6 @@
           slug: mediaserver
 
     - Homepage:
-        href: http://localhost:3000
+        href: https://homepage.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: This Dashboard
         icon: homepage.png
