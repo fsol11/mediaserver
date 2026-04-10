@@ -1046,6 +1046,219 @@ json.dump(cfg, sys.stdout)
 fi
 
 # ============================================================
+# 8c. LANGUAGE — Preferred language across all services
+#     Sets: Radarr/Sonarr/Prowlarr UI language, Jellyfin metadata
+#     language + admin user audio/subtitle defaults, Bazarr subtitle
+#     download language (undefined-audio fallback + default profile),
+#     Jellyseerr original-language content filter.
+# ============================================================
+section "Language"
+
+LANG_CODE="${MEDIA_LANGUAGE:-en}"
+
+# ISO 639-1 → ISO 639-2/B 3-letter map (Jellyfin user config uses 3-letter)
+LANG3=$(python3 -c "
+m={'en':'eng','fr':'fra','de':'deu','es':'spa','it':'ita','pt':'por',
+   'ja':'jpn','ko':'kor','zh':'zho','ru':'rus','ar':'ara','nl':'nld',
+   'sv':'swe','pl':'pol','tr':'tur','hu':'hun','cs':'ces','ro':'ron',
+   'da':'dan','fi':'fin','no':'nor','he':'heb','el':'ell','hi':'hin',
+   'id':'ind','th':'tha','uk':'ukr','vi':'vie'}
+print(m.get('${LANG_CODE}','${LANG_CODE}'))
+" 2>/dev/null || echo "${LANG_CODE}")
+
+# Helper: set uiLanguage on an *arr config/host endpoint
+_set_arr_lang() {
+    local base="$1" path="$2" key="$3" label="$4"
+    local resp body cur_lang host_id updated
+    resp=$(arr_get "${base}${path}" "$key")
+    body=$(body "$resp")
+    cur_lang=$(echo "$body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('uiLanguage',''))" 2>/dev/null || echo "")
+    if [[ "$cur_lang" == "$LANG_CODE" ]]; then
+        skip "${label} UI language already ${LANG_CODE}"; return
+    fi
+    host_id=$(echo "$body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
+    updated=$(echo "$body" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+d['uiLanguage']='${LANG_CODE}'
+print(json.dumps(d))")
+    resp=$(arr_put "${base}${path}/${host_id}" "$key" "$updated")
+    ok_code "$resp" && ok "${label} UI language → ${LANG_CODE}" \
+        || fail "Failed to set ${label} language (HTTP $(code "$resp"))"
+}
+
+is_placeholder "RADARR_API_KEY"   || _set_arr_lang "http://localhost:7878" "/api/v3/config/host" "$RADARR_API_KEY"   "Radarr"
+is_placeholder "SONARR_API_KEY"   || _set_arr_lang "http://localhost:8989" "/api/v3/config/host" "$SONARR_API_KEY"   "Sonarr"
+is_placeholder "PROWLARR_API_KEY" || _set_arr_lang "http://localhost:9696" "/api/v1/config/host" "$PROWLARR_API_KEY" "Prowlarr"
+
+# ── Bazarr: subtitle download language ───────────────────────────
+if ! is_placeholder "BAZARR_API_KEY"; then
+    BAZARR_CFG="$STACK_DIR/config/bazarr/config/config.yaml"
+    if [[ ! -f "$BAZARR_CFG" ]]; then
+        fail "Bazarr config not found — skipping language setup"
+    else
+        bazarr_lang_changed=false
+
+        # Set undefined-audio and undefined-embedded-subtitle fallback language
+        for sed_field in "default_und_audio_lang" "default_und_embedded_subtitles_lang"; do
+            current_val=$(grep -oP "(?<=  ${sed_field}: ')[^']*" "$BAZARR_CFG" 2>/dev/null \
+                || grep -oP "(?<=  ${sed_field}: )[^'\n ]+" "$BAZARR_CFG" 2>/dev/null | head -1 || echo "")
+            if [[ "$current_val" != "$LANG_CODE" ]]; then
+                sed -i "s/  ${sed_field}: .*/  ${sed_field}: '${LANG_CODE}'/" "$BAZARR_CFG"
+                bazarr_lang_changed=true
+            fi
+        done
+
+        # Set embeddedsubtitles fallback_lang
+        current_fb=$(grep -oP '(?<=  fallback_lang: )[^\n]+' "$BAZARR_CFG" 2>/dev/null | head -1 | tr -d "'\""|| echo "")
+        if [[ "$current_fb" != "$LANG_CODE" ]]; then
+            sed -i "s/  fallback_lang: .*/  fallback_lang: ${LANG_CODE}/" "$BAZARR_CFG"
+            bazarr_lang_changed=true
+        fi
+
+        # Create (or find) a language profile for LANG_CODE via direct DB insert
+        # (Bazarr's /api/system/languages/profiles is GET-only; profiles stored in SQLite)
+        BAZARR_DB="/media/${USER}/DATA1/mediaserver/config/bazarr/db/bazarr.db"
+        prof_id=$(docker exec bazarr python3 -c "
+import sqlite3, json
+db = '/config/db/bazarr.db'
+conn = sqlite3.connect(db)
+cur = conn.cursor()
+# Enable the language in table_settings_languages
+cur.execute(\"UPDATE table_settings_languages SET enabled=1 WHERE code2='${LANG_CODE}'\")
+conn.commit()
+# Check for existing profile containing LANG_CODE
+cur.execute('SELECT profileId, items FROM table_languages_profiles')
+match = None
+for pid, items_str in cur.fetchall():
+    try:
+        items = json.loads(items_str)
+        if any(str(i.get('language','')).lower() == '${LANG_CODE}'.lower() for i in items):
+            match = pid; break
+    except: pass
+if match is not None:
+    print(match)
+else:
+    items = json.dumps([{'id':1,'language':'${LANG_CODE}','audio_exclude':'False','hi':'False','forced':'False'}])
+    cur.execute(\"INSERT INTO table_languages_profiles (name, items, cutoff, originalFormat, mustContain, mustNotContain) VALUES (?,?,NULL,0,'[]','[]')\",
+                ('${LANG_CODE}', items))
+    conn.commit()
+    print(cur.lastrowid)
+conn.close()
+" 2>/dev/null || echo "")
+
+        if [[ -n "$prof_id" ]]; then
+            cur_movie_prof=$(grep -oP "(?<=  movie_default_profile: ')[^']*" "$BAZARR_CFG" 2>/dev/null \
+                || grep -oP "(?<=  movie_default_profile: )[^'\n ]+" "$BAZARR_CFG" 2>/dev/null | head -1 || echo "")
+            cur_serie_prof=$(grep -oP "(?<=  serie_default_profile: ')[^']*" "$BAZARR_CFG" 2>/dev/null \
+                || grep -oP "(?<=  serie_default_profile: )[^'\n ]+" "$BAZARR_CFG" 2>/dev/null | head -1 || echo "")
+            if [[ "$cur_movie_prof" != "$prof_id" || "$cur_serie_prof" != "$prof_id" ]]; then
+                sed -i "s/  movie_default_enabled: .*/  movie_default_enabled: true/"          "$BAZARR_CFG"
+                sed -i "s/  movie_default_profile: .*/  movie_default_profile: '${prof_id}'/" "$BAZARR_CFG"
+                sed -i "s/  serie_default_enabled: .*/  serie_default_enabled: true/"          "$BAZARR_CFG"
+                sed -i "s/  serie_default_profile: .*/  serie_default_profile: '${prof_id}'/" "$BAZARR_CFG"
+                bazarr_lang_changed=true
+                ok "Bazarr default subtitle profile → ${LANG_CODE} (profile #${prof_id})"
+            else
+                skip "Bazarr default subtitle profile already set (${LANG_CODE})"
+            fi
+        else
+            fail "Could not create/find Bazarr language profile for ${LANG_CODE}"
+        fi
+
+        if [[ "$bazarr_lang_changed" == true ]]; then
+            docker restart bazarr &>/dev/null
+            ok "Bazarr restarted to apply language changes"
+        fi
+    fi
+fi
+
+# ── Jellyfin: metadata language + admin user audio/subtitle defaults ──
+if ! is_placeholder "JELLYFIN_API_KEY"; then
+    JF_SYSTEM_XML="$STACK_DIR/config/jellyfin/system.xml"
+    JF_BASE="http://localhost:8096"
+    JF_AUTH="Authorization: MediaBrowser Token=\"${JELLYFIN_API_KEY}\""
+    jf_lang_changed=false
+
+    # 1. Preferred metadata language in system.xml
+    if [[ -f "$JF_SYSTEM_XML" ]]; then
+        current_meta=$(grep -oP "(?<=<PreferredMetadataLanguage>)[^<]+" "$JF_SYSTEM_XML" 2>/dev/null || echo "")
+        if [[ "$current_meta" == "$LANG_CODE" ]]; then
+            skip "Jellyfin metadata language already ${LANG_CODE}"
+        else
+            sed -i "s|<PreferredMetadataLanguage>[^<]*</PreferredMetadataLanguage>|<PreferredMetadataLanguage>${LANG_CODE}</PreferredMetadataLanguage>|" "$JF_SYSTEM_XML"
+            ok "Jellyfin metadata language → ${LANG_CODE}"
+            jf_lang_changed=true
+        fi
+    fi
+
+    # 2. Admin user default audio + subtitle language (ISO 639-2 3-letter)
+    JF_USER_ID=$(curl -sf "$JF_BASE/Users" -H "$JF_AUTH" 2>/dev/null \
+        | python3 -c "
+import json,sys
+try:
+    users=json.load(sys.stdin)
+    admin=next((u for u in users if u.get('Policy',{}).get('IsAdministrator')), users[0] if users else {})
+    print(admin.get('Id',''))
+except: print('')
+" 2>/dev/null || echo "")
+
+    if [[ -n "$JF_USER_ID" ]]; then
+        user_cfg=$(curl -sf "$JF_BASE/Users/${JF_USER_ID}" -H "$JF_AUTH" 2>/dev/null \
+            | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin).get('Configuration',{})))" \
+            2>/dev/null || echo "{}")
+        cur_audio=$(echo "$user_cfg" | python3 -c "import json,sys; print(json.load(sys.stdin).get('AudioLanguagePreference',''))" 2>/dev/null || echo "")
+        cur_sub=$(echo "$user_cfg"   | python3 -c "import json,sys; print(json.load(sys.stdin).get('SubtitleLanguagePreference',''))" 2>/dev/null || echo "")
+
+        if [[ "$cur_audio" == "$LANG3" && "$cur_sub" == "$LANG3" ]]; then
+            skip "Jellyfin user audio/subtitle preference already ${LANG3}"
+        else
+            new_cfg=$(echo "$user_cfg" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+d['AudioLanguagePreference']='${LANG3}'
+d['SubtitleLanguagePreference']='${LANG3}'
+d['PlayDefaultAudioTrack']=False
+print(json.dumps(d))")
+            resp=$(curl -s -w "\n%{http_code}" -X POST "$JF_BASE/Users/${JF_USER_ID}/Configuration" \
+                -H "$JF_AUTH" -H "Content-Type: application/json" -d "$new_cfg")
+            ok_code "$resp" && ok "Jellyfin admin user audio/subtitle language → ${LANG3}" \
+                || fail "Failed to set Jellyfin user language (HTTP $(code "$resp"))"
+        fi
+    fi
+
+    if [[ "$jf_lang_changed" == true ]]; then
+        docker restart jellyfin &>/dev/null
+        ok "Jellyfin restarted to apply metadata language"
+    fi
+fi
+
+# ── Jellyseerr: original-language content filter ─────────────────
+if ! is_placeholder "JELLYSEERR_API_KEY"; then
+    JS_BASE="http://localhost:5055"
+    main_resp=$(http GET "$JS_BASE/api/v1/settings/main" -H "X-Api-Key: $JELLYSEERR_API_KEY")
+    main_body=$(body "$main_resp")
+    cur_locale=$(echo "$main_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('locale',''))" 2>/dev/null || echo "")
+    if [[ "$cur_locale" == "$LANG_CODE" ]]; then
+        skip "Jellyseerr UI locale already ${LANG_CODE}"
+    else
+        updated=$(echo "$main_body" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+d.pop('apiKey', None)
+d['locale']='${LANG_CODE}'
+print(json.dumps(d))")
+        resp=$(http POST "$JS_BASE/api/v1/settings/main" \
+            -H "X-Api-Key: $JELLYSEERR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$updated")
+        ok_code "$resp" && ok "Jellyseerr UI locale → ${LANG_CODE}" \
+            || fail "Failed to set Jellyseerr locale (HTTP $(code "$resp"))"
+
+    fi
+fi
+
+# ============================================================
 # 9. RECYCLARR — Trigger initial sync
 # ============================================================
 section "Recyclarr"

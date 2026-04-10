@@ -8,7 +8,8 @@
 #   2.  Enable Docker on boot & create all directories
 #   3.  Start all containers
 #   4.  Complete the Jellyfin setup wizard via API
-#   5.  Create Jellyfin libraries (Movies, TV Shows, Audiobooks)
+#   5.  Install Jellyfin plugins (Playback Reporting, TMDb Box Sets, Intro Skipper, TheTVDB, Trakt)
+#   6.  Create Jellyfin libraries (Movies, TV Shows, Audiobooks)
 #   6.  Complete the Jellyseerr setup wizard via API
 #   7.  Extract all API keys from config files
 #   8.  Wire every service to every other service
@@ -672,6 +673,116 @@ fi
 
 # Reload
 set -o allexport; source "$ENV_FILE"; set +o allexport
+
+# ============================================================
+# STEP 4b — Jellyfin: Plugins
+# ============================================================
+section "Jellyfin Plugins"
+
+if [[ -n "$JF_AUTH" ]]; then
+    JF_OFFICIAL_REPO="https://repo.jellyfin.org/packages.json"
+    JF_IS_REPO="https://raw.githubusercontent.com/intro-skipper/intro-skipper/master/manifest.json"
+    JF_TRAKT_REPO="https://raw.githubusercontent.com/nickogl/jellyfin-plugin-trakt/master/manifest.json"
+    _jf_new_plugins=0
+
+    # Ensure a plugin repository is registered in Jellyfin
+    _jf_add_repo() {
+        local rname="$1" rurl="$2"
+        local repos
+        repos=$(curl -sf "$JF_BASE/Repositories" -H "$JF_AUTH" 2>/dev/null || echo "[]")
+        if python3 -c "
+import json,sys
+repos=json.loads(sys.argv[1])
+exit(0 if any(r.get('Url')==sys.argv[2] for r in repos) else 1)" \
+                "$repos" "$rurl" 2>/dev/null; then
+            skip "Plugin repo '${rname}' already configured"
+        else
+            updated=$(python3 -c "
+import json,sys
+repos=json.loads(sys.argv[1])
+repos.append({'Name':sys.argv[2],'Url':sys.argv[3],'Enabled':True})
+print(json.dumps(repos))" "$repos" "$rname" "$rurl")
+            resp=$(http POST "$JF_BASE/Repositories" \
+                -H "$JF_AUTH" -H "Content-Type: application/json" \
+                -d "$updated")
+            ok_code "$resp" && ok "Plugin repo '${rname}' added" \
+                || fail "Failed to add plugin repo '${rname}' (HTTP $(code "$resp"))"
+        fi
+    }
+
+    # Install a Jellyfin plugin by its catalog name (idempotent)
+    _jf_install_plugin() {
+        local pname="$1"
+        # Skip if already installed
+        installed=$(curl -sf "$JF_BASE/Plugins" -H "$JF_AUTH" 2>/dev/null || echo "[]")
+        if python3 -c "
+import json,sys
+plugins=json.loads(sys.argv[1])
+exit(0 if any(p.get('Name','').lower()==sys.argv[2].lower() for p in plugins) else 1)" \
+                "$installed" "$pname" 2>/dev/null; then
+            skip "Plugin '${pname}' already installed"
+            return 0
+        fi
+        # Look up package in the combined catalog
+        pkgs=$(curl -sf "$JF_BASE/Packages" -H "$JF_AUTH" 2>/dev/null || echo "[]")
+        pkg_info=$(python3 -c "
+import json,sys
+pkgs=json.loads(sys.argv[1])
+name=sys.argv[2].lower()
+match=next((p for p in pkgs if p.get('name','').lower()==name),None)
+if match and match.get('versions'):
+    v=match['versions'][0]
+    print(match.get('guid','')+'|'+v.get('version','')+'|'+v.get('repositoryUrl',''))
+else:
+    print('')" "$pkgs" "$pname" 2>/dev/null || echo "")
+
+        if [[ -z "$pkg_info" ]]; then
+            fail "Plugin '${pname}' not found in catalog — skipping"
+            return 1
+        fi
+        IFS='|' read -r _pguid _pver _prepo <<< "$pkg_info"
+        local _pname_enc
+        _pname_enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$pname")
+        resp=$(http POST "$JF_BASE/Packages/Installed/${_pname_enc}" \
+            -H "$JF_AUTH" \
+            -G \
+            --data-urlencode "assemblyGuid=${_pguid}" \
+            --data-urlencode "version=${_pver}" \
+            --data-urlencode "repositoryUrl=${_prepo}")
+        if ok_code "$resp"; then
+            ok "Plugin '${pname}' v${_pver} installed"
+            _jf_new_plugins=$((_jf_new_plugins+1))
+        else
+            fail "Failed to install plugin '${pname}' (HTTP $(code "$resp"))"
+        fi
+    }
+
+    # Register third-party repositories
+    _jf_add_repo "Intro Skipper" "$JF_IS_REPO"
+    _jf_add_repo "Trakt"        "$JF_TRAKT_REPO"
+
+    # Install plugins
+    _jf_install_plugin "Playback Reporting"   # viewing statistics dashboard
+    _jf_install_plugin "TMDb Box Sets"        # auto-create movie collections from TMDb
+    _jf_install_plugin "Intro Skipper"        # auto-detect and skip TV intros/credits
+    _jf_install_plugin "TheTVDB"              # TVDB metadata for TV shows & movies
+    _jf_install_plugin "Trakt"                # scrobble watch history to Trakt.tv
+
+    # Restart Jellyfin only when new plugins were actually installed
+    if (( _jf_new_plugins > 0 )); then
+        docker restart jellyfin &>/dev/null
+        info "Waiting for Jellyfin to restart after plugin install …"
+        _jfi=0
+        while (( _jfi < 120 )); do
+            [[ "$(curl -sf --max-time 3 "$JF_BASE/health" 2>/dev/null)" == "Healthy" ]] && break
+            sleep 3; _jfi=$((_jfi+3))
+        done
+        (( _jfi < 120 )) && ok "Jellyfin restarted" \
+            || fail "Jellyfin did not become healthy after restart"
+    fi
+else
+    skip "No Jellyfin auth — skipping plugin installation"
+fi
 
 # ============================================================
 # STEP 5 — Jellyseerr: wizard (link to Jellyfin)
