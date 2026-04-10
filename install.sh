@@ -420,14 +420,14 @@ if [[ "$needs_pull" == true ]]; then
     info "Pulling missing images..."
 fi
 
-# Always check for updates (pulls only layers that changed)
-if docker compose -f "$STACK_DIR/docker-compose.yml" pull --quiet 2>/dev/null; then
-    ok "Images up to date"
+# Always pull to get newest images (recreates containers whose digest changed)
+if docker compose -f "$STACK_DIR/docker-compose.yml" pull 2>&1 | grep -E "Pulled|up to date|error" | sed 's/^/  /'; then
+    ok "Image pull complete"
 else
     die "Failed to pull one or more Docker images"
 fi
 
-if docker compose -f "$STACK_DIR/docker-compose.yml" up -d; then
+if docker compose -f "$STACK_DIR/docker-compose.yml" up -d --remove-orphans; then
     ok "All containers started"
 else
     die "Failed to start one or more containers"
