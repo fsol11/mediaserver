@@ -128,9 +128,17 @@ services:
       - "7359:7359/udp"
       # Uncomment below if you need DLNA support:
       # - "1900:1900/udp"
-    # Uncomment for Intel VAAPI hardware transcoding:
+    # Intel VAAPI hardware transcoding (uncomment if no NVIDIA GPU):
     # devices:
     #   - /dev/dri:/dev/dri
+    # NVIDIA GPU hardware transcoding (requires nvidia-container-toolkit):
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - mediaserver
     restart: unless-stopped

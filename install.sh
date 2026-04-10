@@ -299,6 +299,45 @@ else
         && ok "Docker daemon started" || die "Failed to start Docker daemon"
 fi
 
+# Ensure current user can talk to Docker without sudo.
+# After installing Docker or removing Docker Desktop the 'docker' group
+# may not be active in the running shell.  Re-exec under sg if needed.
+if ! docker info &>/dev/null 2>&1; then
+    sudo usermod -aG docker "$USER" 2>/dev/null || true
+    if sg docker -c "docker info" &>/dev/null 2>&1; then
+        info "Re-launching install.sh with docker group active..."
+        exec sg docker -c "bash \"$0\" $*"
+    else
+        die "Cannot connect to Docker daemon — check permissions"
+    fi
+fi
+
+# NVIDIA Container Toolkit (only if an NVIDIA GPU is present)
+if lspci 2>/dev/null | grep -qi nvidia || [[ -e /dev/nvidia0 ]]; then
+    if dpkg -l nvidia-container-toolkit &>/dev/null 2>&1; then
+        skip "nvidia-container-toolkit already installed"
+    else
+        info "NVIDIA GPU detected — installing nvidia-container-toolkit..."
+        # Add NVIDIA container toolkit repository
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+            | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null
+        curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+            | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#' \
+            | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+        sudo apt-get update -qq \
+            && sudo apt-get install -y -qq nvidia-container-toolkit >/dev/null \
+            && ok "nvidia-container-toolkit installed" \
+            || { fail "nvidia-container-toolkit install failed — GPU transcoding unavailable"; }
+        # Configure Docker runtime and restart daemon
+        sudo nvidia-ctk runtime configure --runtime=docker >/dev/null 2>&1 \
+            && sudo systemctl restart docker \
+            && ok "Docker configured for NVIDIA runtime" \
+            || fail "Failed to configure Docker NVIDIA runtime"
+    fi
+else
+    skip "No NVIDIA GPU detected — skipping nvidia-container-toolkit"
+fi
+
 # pip3 + uptime-kuma-api (for Uptime Kuma automation)
 if python3 -c "import uptime_kuma_api" &>/dev/null; then
     skip "uptime-kuma-api already installed"
