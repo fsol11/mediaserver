@@ -838,6 +838,50 @@ JSON
             ok_code "$resp" && ok "Sonarr added to Jellyseerr (profile: ${sonarr_profile_name:-Any})" \
                 || fail "Failed to add Sonarr (HTTP $(code "$resp")): $(body "$resp")"
         fi
+
+        # ── Jellyfin library sync ─────────────────────────────────────
+        # Enable all Jellyfin libraries in Jellyseerr so existing media
+        # is flagged as "Available" rather than requestable again.
+        lib_resp=$(http GET "$JS_BASE/api/v1/settings/jellyfin/library?sync=true" -H "X-Api-Key: $JS_KEY")
+        all_enabled=$(body "$lib_resp" | python3 -c "
+import json,sys
+try:
+    libs = json.load(sys.stdin)
+    print('true' if libs and all(l.get('enabled') for l in libs) else 'false')
+except: print('false')
+" 2>/dev/null)
+
+        if [[ "$all_enabled" == "true" ]]; then
+            skip "Jellyseerr Jellyfin libraries already enabled"
+        else
+            # Build comma-separated list of all library IDs
+            lib_ids=$(body "$lib_resp" | python3 -c "
+import json,sys
+try:
+    libs = json.load(sys.stdin)
+    print(','.join(l['id'] for l in libs))
+except: print('')
+" 2>/dev/null)
+
+            if [[ -z "$lib_ids" ]]; then
+                fail "No Jellyfin libraries found — ensure Jellyfin has libraries configured"
+            else
+                enable_resp=$(http GET "$JS_BASE/api/v1/settings/jellyfin/library?sync=true&enable=${lib_ids}" \
+                    -H "X-Api-Key: $JS_KEY")
+                if ok_code "$enable_resp"; then
+                    ok "Jellyseerr Jellyfin libraries enabled"
+                    # Trigger a full scan so existing media is marked Available
+                    scan_resp=$(http POST "$JS_BASE/api/v1/settings/jellyfin/sync" \
+                        -H "X-Api-Key: $JS_KEY" \
+                        -H "Content-Type: application/json" \
+                        -d '{"start":true}')
+                    ok_code "$scan_resp" && ok "Jellyseerr full library scan started" \
+                        || fail "Failed to start library scan (HTTP $(code "$scan_resp"))"
+                else
+                    fail "Failed to enable Jellyfin libraries (HTTP $(code "$enable_resp"))"
+                fi
+            fi
+        fi
     fi
 fi
 
