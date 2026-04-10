@@ -31,7 +31,7 @@
         widget:
           type: audiobookshelf
           url: http://audiobookshelf:80
-          key: "{{HOMEPAGE_VAR_JELLYFIN_KEY}}"
+          key: "{{HOMEPAGE_VAR_AUDIOBOOKSHELF_KEY}}"
 
 - Downloads:
     - qBittorrent:

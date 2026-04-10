@@ -19,6 +19,8 @@ A fully automated, self-hosted media server stack that deploys 14 Docker contain
 | **Audiobookshelf** | Audiobook & podcast server                    |
 | **Cloudflared**  | Cloudflare Tunnel for remote access (optional)  |
 
+Tested on Ubuntu 25.10.
+
 ---
 
 ## Setup
@@ -26,27 +28,34 @@ A fully automated, self-hosted media server stack that deploys 14 Docker contain
 ### 1\. Clone the repository
 
 ```bash
-git clone <repo-url> mediaserver
+git clone https://github.com/fsol11/mediaserver.git
 cd mediaserver
 ```
 
 ### 2\. Edit the configuration
 
-On first run, `install.sh` generates a `.env` file from the `.env.initial` template. You can also create it ahead of time:
-
+Create `.env` file copying from `.env.initial`:
 ```bash
 cp .env.initial .env
 ```
+> **Note:** also when running `install.sh` for the first time - when `.env` does not exist - it would create a `.env` file from the `.env.initial` template and asks you edit it
+
+
 
 Open `.env` and set:
 
--   **`QBIT_USERNAME` / `QBIT_PASSWORD`** — qBittorrent login credentials
--   **`JELLYFIN_ADMIN_USER` / `JELLYFIN_ADMIN_PASSWORD`** — Jellyfin admin account
+-   **`ADMIN_USER` / `ADMIN_PASSWORD`** — admin credentials for all services (Jellyfin, qBittorrent, Uptime Kuma, Audiobookshelf)
 -   **`DATA_ROOT`** — root path to your media storage drive
+
+These folders are already set, if you don't want to custome, just let them be:
 -   **`DIR_DOWNLOADS` / `DIR_MOVIES` / `DIR_TV` / `DIR_AUDIOBOOKS`** — media folder paths
--   **`CLOUDFLARE_TUNNEL_TOKEN`** — *(optional)* for remote access via Cloudflare Tunnel
+
+Some public providers are listed in these already. If you don't want to customize them, just leave them:
 -   **`BAZARR_PROVIDERS`** — comma-separated subtitle providers (see Bazarr UI → Settings → Providers for names)
 -   **`PROWLARR_INDEXERS`** — comma-separated public indexers (see Prowlarr UI → Indexers → Add Indexer for names)
+
+If you would like to install Cloudflard, add the token here. Read [CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md) for more information
+-   **`CLOUDFLARE_TUNNEL_TOKEN`** — *(optional)* for remote access via Cloudflare Tunnel
 
 API keys are populated automatically — do not edit them manually.
 
@@ -58,12 +67,17 @@ bash install.sh
 
 This single command does everything.
 
-### What still needs manual setup
+### What gets automated
 
-These items require your personal preferences or third-party accounts:
+Everything is configured automatically — no manual setup required:
 
--   **Uptime Kuma** → Create admin account, add monitors for each service
--   **Audiobookshelf** → Create admin account on first visit
+-   All service connections (download clients, indexers, media servers)
+-   Jellyfin admin account, libraries, and FFmpeg path
+-   Jellyseerr Jellyfin auth + Radarr/Sonarr connections
+-   Prowlarr indexers and app sync
+-   Bazarr subtitle providers
+-   Uptime Kuma admin account + monitors for all services
+-   Audiobookshelf admin account
 
 ---
 

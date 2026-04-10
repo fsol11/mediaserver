@@ -258,6 +258,7 @@ services:
       - TZ=${TZ}
       - PUID=${PUID}
       - PGID=${PGID}
+      - HOMEPAGE_ALLOWED_HOSTS=homepage.farshid.ca
       # Expose API keys to Homepage for widgets
       - HOMEPAGE_VAR_SONARR_KEY=${SONARR_API_KEY}
       - HOMEPAGE_VAR_RADARR_KEY=${RADARR_API_KEY}
@@ -265,8 +266,9 @@ services:
       - HOMEPAGE_VAR_BAZARR_KEY=${BAZARR_API_KEY}
       - HOMEPAGE_VAR_JELLYFIN_KEY=${JELLYFIN_API_KEY}
       - HOMEPAGE_VAR_JELLYSEERR_KEY=${JELLYSEERR_API_KEY}
-      - HOMEPAGE_VAR_QBIT_USERNAME=${QBIT_USERNAME}
-      - HOMEPAGE_VAR_QBIT_PASSWORD=${QBIT_PASSWORD}
+      - HOMEPAGE_VAR_AUDIOBOOKSHELF_KEY=${AUDIOBOOKSHELF_API_KEY}
+      - HOMEPAGE_VAR_QBIT_USERNAME=${ADMIN_USER}
+      - HOMEPAGE_VAR_QBIT_PASSWORD=${ADMIN_PASSWORD}
       - HOMEPAGE_VAR_DATA_ROOT=${DATA_ROOT}
     volumes:
       - ./config/homepage:/app/config
@@ -302,6 +304,7 @@ services:
     container_name: audiobookshelf
     environment:
       - TZ=${TZ}
+      - ROUTER_BASE_PATH=/
     volumes:
       - ./config/audiobookshelf:/config
       - ./config/audiobookshelf/metadata:/metadata
@@ -352,6 +355,8 @@ services:
     networks:
       - mediaserver
     restart: unless-stopped
+    profiles:
+      - cloudflare
     depends_on:
       - jellyfin
       - jellyseerr

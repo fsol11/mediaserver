@@ -222,12 +222,9 @@ set -o allexport; source "$ENV_FILE"; set +o allexport
 
 # Validate required values
 MISSING=()
-for var in QBIT_USERNAME QBIT_PASSWORD; do
-    [[ -z "$(env_val "$var")" ]] && MISSING+=("$var")
-done
-# Jellyfin credentials only required before wizard runs (auto-removed after)
-if grep -q "^JELLYFIN_ADMIN_USER=" "$ENV_FILE" 2>/dev/null; then
-    for var in JELLYFIN_ADMIN_USER JELLYFIN_ADMIN_PASSWORD; do
+# Admin credentials only required before wizard runs (auto-removed after)
+if grep -q "^ADMIN_USER=" "$ENV_FILE" 2>/dev/null; then
+    for var in ADMIN_USER ADMIN_PASSWORD; do
         val=$(env_val "$var")
         [[ -z "$val" || "$val" == *"changeme"* ]] && MISSING+=("$var")
     done
@@ -239,13 +236,12 @@ if (( ${#MISSING[@]} > 0 )); then
     exit 1
 fi
 
-JF_USER="${JELLYFIN_ADMIN_USER:-}"
-JF_PASS="${JELLYFIN_ADMIN_PASSWORD:-}"
+JF_USER="${ADMIN_USER:-}"
+JF_PASS="${ADMIN_PASSWORD:-}"
 
 ok "Running as:        $(id -un) (PUID=$PUID, PGID=$PGID)"
 ok "Timezone:          $TZ (auto-detected)"
-ok "qBittorrent user:  $QBIT_USERNAME"
-[[ -n "$JF_USER" ]] && ok "Jellyfin admin:    $JF_USER" || ok "Jellyfin admin:    (credentials already used and removed)"
+[[ -n "$JF_USER" ]] && ok "Admin user:        $JF_USER" || ok "Admin user:        (credentials already used and removed)"
 echo ""
 echo -e "  ${GRN}Starting unattended setup...${NC}"
 
@@ -303,6 +299,19 @@ else
         && ok "Docker daemon started" || die "Failed to start Docker daemon"
 fi
 
+# pip3 + uptime-kuma-api (for Uptime Kuma automation)
+if python3 -c "import uptime_kuma_api" &>/dev/null; then
+    skip "uptime-kuma-api already installed"
+else
+    info "Installing uptime-kuma-api..."
+    if ! command -v pip3 &>/dev/null; then
+        sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip python3-setuptools >/dev/null 2>&1
+    fi
+    pip3 install --break-system-packages -q setuptools uptime-kuma-api 2>/dev/null \
+        && ok "uptime-kuma-api installed" \
+        || { skip "uptime-kuma-api install failed — Uptime Kuma will need manual setup"; }
+fi
+
 # ============================================================
 # STEP 1 — System: directories + Docker on boot
 # ============================================================
@@ -348,6 +357,14 @@ check_desktop_mount_sharing
 # STEP 2 — Start containers
 # ============================================================
 section "Starting Containers"
+
+# Enable cloudflare profile if tunnel token is set
+COMPOSE_PROFILES=""
+if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+    COMPOSE_PROFILES="cloudflare"
+    info "Cloudflare Tunnel token found — cloudflared will be started"
+fi
+export COMPOSE_PROFILES
 
 # Pull missing images and check for updates on existing ones
 needs_pull=false
@@ -477,7 +494,7 @@ JF_AUTH=""
 if [[ "$wizard_done" != "True" ]]; then
     # ── First run: complete the wizard ─────────────────────
     [[ -z "$JF_USER" || -z "$JF_PASS" ]] && \
-        die "Jellyfin wizard not done but JELLYFIN_ADMIN_USER/PASSWORD missing from .env"
+        die "Jellyfin wizard not done but ADMIN_USER/ADMIN_PASSWORD missing from .env"
 
     http POST "$JF_BASE/Startup/Configuration" \
         -H "Content-Type: application/json" \
@@ -528,7 +545,7 @@ elif ! is_placeholder "JELLYFIN_API_KEY"; then
 else
     # ── Re-run: wizard done but no API key and no credentials
     fail "Jellyfin wizard done but JELLYFIN_API_KEY not set"
-    info "Add JELLYFIN_ADMIN_USER and JELLYFIN_ADMIN_PASSWORD back to .env and re-run"
+    info "Add ADMIN_USER and ADMIN_PASSWORD back to .env and re-run"
 fi
 
 # ── Libraries + API key (runs whenever we have a valid auth token) ──
@@ -633,7 +650,7 @@ if [[ "$initialized" == "True" ]]; then
 elif [[ -z "$JF_USER" || -z "$JF_PASS" ]]; then
     # Re-run after credentials were scrubbed but Jellyseerr wasn't initialized
     fail "Jellyseerr not initialized but Jellyfin credentials are gone"
-    info "Add JELLYFIN_ADMIN_USER and JELLYFIN_ADMIN_PASSWORD back to .env and re-run"
+    info "Add ADMIN_USER and ADMIN_PASSWORD back to .env and re-run"
 else
     JS_JAR=$(mktemp)
     init_resp=$(curl -s -c "$JS_JAR" -b "$JS_JAR" \
@@ -714,12 +731,6 @@ echo -e "   ${GRN}►${NC} qBittorrent    http://localhost:8080"
 echo -e "   ${GRN}►${NC} Bazarr         http://localhost:6767"
 echo -e "   ${GRN}►${NC} Audiobookshelf http://localhost:13378"
 echo -e "   ${GRN}►${NC} Uptime Kuma    http://localhost:3001"
-echo ""
-echo -e "  ${BLD}Still needs manual attention:${NC}"
-echo -e "   ${YLW}•${NC} Prowlarr → Add your torrent indexers (trackers)"
-echo -e "   ${YLW}•${NC} Bazarr → Settings → Subtitles → add providers"
-echo -e "   ${YLW}•${NC} Uptime Kuma → create account → add monitors"
-echo -e "   ${YLW}•${NC} Audiobookshelf → create admin account"
 echo ""
 
 # API key status check

@@ -73,6 +73,7 @@ wait_http() {
 # ── API helpers ────────────────────────────────────────────
 arr_get()  { http GET  "$1" -H "X-Api-Key: $2" -H "Content-Type: application/json"; }
 arr_post() { http POST "$1" -H "X-Api-Key: $2" -H "Content-Type: application/json" -d "$3"; }
+arr_put()  { http PUT  "$1" -H "X-Api-Key: $2" -H "Content-Type: application/json" -d "$3"; }
 arr_exists() {
     # Check if an arr response array contains a field=value match
     local resp="$1" field="$2" value="$3"
@@ -133,8 +134,8 @@ qbit_logged_in=false
 
 # Try logging in with desired credentials first (idempotent re-run)
 login_resp=$(curl -sc "$QBIT_COOKIE" -X POST "http://localhost:8080/api/v2/auth/login" \
-    --data-urlencode "username=${QBIT_USERNAME:-admin}" \
-    --data-urlencode "password=${QBIT_PASSWORD:-adminadmin}" 2>/dev/null)
+    --data-urlencode "username=${ADMIN_USER:-admin}" \
+    --data-urlencode "password=${ADMIN_PASSWORD:-adminadmin}" 2>/dev/null)
 if [[ "$login_resp" == "Ok." ]]; then
     qbit_logged_in=true
     skip "Logged in with configured credentials"
@@ -153,11 +154,11 @@ import json, sys
 print(json.dumps({
     'web_ui_username': sys.argv[1],
     'web_ui_password': sys.argv[2]
-}))" "${QBIT_USERNAME:-admin}" "${QBIT_PASSWORD:-adminadmin}")
+})" "${ADMIN_USER:-admin}" "${ADMIN_PASSWORD:-adminadmin}")
             cred_resp=$(curl -s -o /dev/null -w "%{http_code}" -b "$QBIT_COOKIE" \
                 -X POST "http://localhost:8080/api/v2/app/setPreferences" \
                 --data-urlencode "json=$prefs_json")
-            [[ "$cred_resp" == "200" ]] && ok "Credentials updated to ${QBIT_USERNAME:-admin}" \
+            [[ "$cred_resp" == "200" ]] && ok "Credentials updated to ${ADMIN_USER:-admin}" \
                 || fail "Could not update credentials (HTTP $cred_resp)"
         fi
     fi
@@ -169,7 +170,7 @@ if [[ "$qbit_logged_in" == true ]]; then
         --data-urlencode 'json={"save_path":"/downloads","temp_path":"/downloads/incomplete","temp_path_enabled":true,"incomplete_files_ext":true}')
     [[ "$prefs_resp" == "200" ]] && ok "Save path set to /downloads" || fail "Could not set preferences (HTTP $prefs_resp)"
 else
-    fail "qBittorrent login failed — check QBIT_USERNAME/QBIT_PASSWORD in .env"
+    fail "qBittorrent login failed — check ADMIN_USER/ADMIN_PASSWORD in .env"
 fi
 rm -f "$QBIT_COOKIE"
 
@@ -199,8 +200,8 @@ else
     {"name": "port",                 "value": 8080},
     {"name": "useSsl",               "value": false},
     {"name": "urlBase",              "value": ""},
-    {"name": "username",             "value": "${QBIT_USERNAME:-admin}"},
-    {"name": "password",             "value": "${QBIT_PASSWORD:-adminadmin}"},
+    {"name": "username",             "value": "${ADMIN_USER:-admin}"},
+    {"name": "password",             "value": "${ADMIN_PASSWORD:-adminadmin}"},
     {"name": "movieCategory",        "value": "radarr"},
     {"name": "recentMoviePriority",  "value": 0},
     {"name": "olderMoviePriority",   "value": 0},
@@ -232,6 +233,30 @@ else
     else fail "Failed to add root folder (HTTP $(code "$resp")): $(body "$resp")"; fi
 fi
 
+# 3c. Authentication
+if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
+    host_resp=$(arr_get "$RADARR_BASE/api/v3/config/host" "$RADARR_KEY")
+    host_body=$(body "$host_resp")
+    auth_method=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('authenticationMethod','none'))" 2>/dev/null || echo "none")
+    if [[ "$auth_method" == "forms" ]]; then
+        skip "Authentication already enabled (Forms)"
+    else
+        host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
+        auth_payload=$(python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+d['authenticationMethod']='forms'
+d['authenticationRequired']='enabled'
+d['username']=sys.argv[2]
+d['password']=sys.argv[3]
+d['passwordConfirmation']=sys.argv[3]
+print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
+        resp=$(arr_put "$RADARR_BASE/api/v3/config/host/$host_id" "$RADARR_KEY" "$auth_payload")
+        ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
+            || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
+    fi
+fi
+
 # ============================================================
 # 4. SONARR — Download client + root folder
 # ============================================================
@@ -258,8 +283,8 @@ else
     {"name": "port",               "value": 8080},
     {"name": "useSsl",             "value": false},
     {"name": "urlBase",            "value": ""},
-    {"name": "username",           "value": "${QBIT_USERNAME:-admin}"},
-    {"name": "password",           "value": "${QBIT_PASSWORD:-adminadmin}"},
+    {"name": "username",           "value": "${ADMIN_USER:-admin}"},
+    {"name": "password",           "value": "${ADMIN_PASSWORD:-adminadmin}"},
     {"name": "tvCategory",         "value": "sonarr"},
     {"name": "recentTvPriority",   "value": 0},
     {"name": "olderTvPriority",    "value": 0},
@@ -289,6 +314,30 @@ else
     if ok_code "$resp"; then ok "Root folder /tv added"
     elif is_already_exists "$(body "$resp")"; then skip "Root folder /tv already set"
     else fail "Failed to add root folder (HTTP $(code "$resp")): $(body "$resp")"; fi
+fi
+
+# 4c. Authentication
+if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
+    host_resp=$(arr_get "$SONARR_BASE/api/v3/config/host" "$SONARR_KEY")
+    host_body=$(body "$host_resp")
+    auth_method=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('authenticationMethod','none'))" 2>/dev/null || echo "none")
+    if [[ "$auth_method" == "forms" ]]; then
+        skip "Authentication already enabled (Forms)"
+    else
+        host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
+        auth_payload=$(python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+d['authenticationMethod']='forms'
+d['authenticationRequired']='enabled'
+d['username']=sys.argv[2]
+d['password']=sys.argv[3]
+d['passwordConfirmation']=sys.argv[3]
+print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
+        resp=$(arr_put "$SONARR_BASE/api/v3/config/host/$host_id" "$SONARR_KEY" "$auth_payload")
+        ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
+            || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
+    fi
 fi
 
 # ============================================================
@@ -382,7 +431,30 @@ JSON
     else fail "Failed to add FlareSolverr proxy (HTTP $(code "$resp2")): $(body "$resp2")"; fi
 fi
 
-# 5d. Add public indexers from PROWLARR_INDEXERS list
+# 5d. Authentication
+if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
+    host_resp=$(arr_get "$PROWLARR_BASE/api/v1/config/host" "$PROWLARR_KEY")
+    host_body=$(body "$host_resp")
+    prowl_user=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('username',''))" 2>/dev/null || echo "")
+    if [[ -n "$prowl_user" ]]; then
+        skip "Authentication already configured (${prowl_user})"
+    else
+        host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
+        auth_payload=$(python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+d['authenticationMethod']='forms'
+d['authenticationRequired']='enabled'
+d['username']=sys.argv[2]
+d['password']=sys.argv[3]
+print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
+        resp=$(arr_put "$PROWLARR_BASE/api/v1/config/host/$host_id" "$PROWLARR_KEY" "$auth_payload")
+        ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
+            || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
+    fi
+fi
+
+# 5e. Add public indexers from PROWLARR_INDEXERS list
 if [[ -n "${PROWLARR_INDEXERS:-}" ]]; then
     # Fetch indexer schema for building payloads
     PROWLARR_SCHEMA_FILE=$(mktemp)
@@ -468,7 +540,7 @@ else
     skip "PROWLARR_INDEXERS not set in .env — skipping indexer setup"
 fi
 
-# 5e. Trigger full sync
+# 5f. Trigger full sync
 resp=$(arr_post "$PROWLARR_BASE/api/v1/command" "$PROWLARR_KEY" '{"name":"ApplicationIndexerSync"}')
 ok_code "$resp" && ok "Indexer sync triggered" \
     || fail "Sync trigger failed (HTTP $(code "$resp"))"
@@ -552,6 +624,37 @@ JSON
         -d "$payload")
     ok_code "$resp" && ok "Sonarr connected in Bazarr" \
         || fail "Failed to connect Sonarr (HTTP $(code "$resp")): $(body "$resp")"
+fi
+
+# 6c. Authentication
+if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
+    bazarr_auth_type=$(body "$current" | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(d.get('auth',{}).get('type') or '')
+except: print('')
+" 2>/dev/null)
+    if [[ -n "$bazarr_auth_type" ]]; then
+        skip "Authentication already enabled"
+    else
+        auth_payload=$(cat <<JSON
+{
+  "auth": {
+    "type": "form",
+    "username": "${ADMIN_USER}",
+    "password": "${ADMIN_PASSWORD}"
+  }
+}
+JSON
+)
+        resp=$(http POST "$BAZARR_BASE/api/system/settings" \
+            -H "X-API-KEY: $BAZARR_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$auth_payload")
+        ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
+            || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
+    fi
 fi
 
 # ── Subtitle Providers ──────────────────────────────────────
@@ -748,6 +851,133 @@ else
 fi
 
 # ============================================================
+# 9. UPTIME KUMA — Create account + add monitors
+# ============================================================
+section "Uptime Kuma"
+
+if python3 -c "import uptime_kuma_api" &>/dev/null; then
+    python3 - <<'PYEOF'
+import os, sys
+try:
+    from uptime_kuma_api import UptimeKumaApi, MonitorType
+except ImportError:
+    print("  \033[1;33m\u2013\033[0m  uptime-kuma-api not installed \u2014 skipping")
+    sys.exit(0)
+
+try:
+    api = UptimeKumaApi("http://localhost:3001", timeout=10)
+except Exception as e:
+    print(f"  \033[0;31m\u2717\033[0m  Cannot connect to Uptime Kuma: {e}")
+    sys.exit(0)
+
+user = os.environ.get("ADMIN_USER", "admin")
+pw = os.environ.get("ADMIN_PASSWORD", "")
+
+# Create admin account if needed
+try:
+    if api.need_setup():
+        if not pw or pw == "changeme":
+            print("  \033[1;33m\u2013\033[0m  Skipping Uptime Kuma setup \u2014 set ADMIN_PASSWORD in .env first")
+            api.disconnect()
+            sys.exit(0)
+        api.setup(user, pw)
+        print(f"  \033[0;32m\u2713\033[0m  Admin account created: {user}")
+except Exception as e:
+    print(f"  \033[0;31m\u2717\033[0m  Failed to create account: {e}")
+    api.disconnect()
+    sys.exit(0)
+
+# Login
+try:
+    api.login(user, pw)
+except Exception as e:
+    print(f"  \033[1;33m\u2013\033[0m  Cannot login (account may already exist with different creds): {e}")
+    api.disconnect()
+    sys.exit(0)
+
+# Service monitors to add (container names on the Docker network)
+monitors = [
+    ("Jellyfin",       "http://jellyfin:8096"),
+    ("Jellyseerr",     "http://jellyseerr:5055"),
+    ("Radarr",         "http://radarr:7878"),
+    ("Sonarr",         "http://sonarr:8989"),
+    ("Prowlarr",       "http://prowlarr:9696"),
+    ("qBittorrent",    "http://qbittorrent:8080"),
+    ("Bazarr",         "http://bazarr:6767"),
+    ("Homepage",       "http://homepage:3000"),
+    ("Audiobookshelf", "http://audiobookshelf:13378"),
+    ("FlareSolverr",   "http://flaresolverr:8191"),
+]
+
+existing = {m["name"] for m in api.get_monitors()}
+added = 0
+for name, url in monitors:
+    if name in existing:
+        continue
+    try:
+        api.add_monitor(type=MonitorType.HTTP, name=name, url=url, interval=60, maxretries=3)
+        added += 1
+    except Exception as e:
+        print(f"  \033[0;31m\u2717\033[0m  Failed to add {name}: {e}")
+
+skipped = len(monitors) - added
+if added:
+    print(f"  \033[0;32m\u2713\033[0m  {added} monitor(s) added")
+if skipped == len(monitors):
+    print(f"  \033[1;33m\u2013\033[0m  All {skipped} monitors already exist")
+
+api.disconnect()
+PYEOF
+else
+    skip "uptime-kuma-api not installed \u2014 set up Uptime Kuma manually"
+fi
+
+# ============================================================
+# 10. AUDIOBOOKSHELF — Create admin account
+# ============================================================
+section "Audiobookshelf"
+
+ABS_URL="http://localhost:13378"
+ABS_STATUS=$(curl -s --max-time 10 "$ABS_URL/status" 2>/dev/null) || ABS_STATUS=""
+
+if [[ -z "$ABS_STATUS" ]]; then
+    fail "Cannot reach Audiobookshelf at $ABS_URL"
+else
+    ABS_INIT=$(json_get "$ABS_STATUS" "isInit")
+    if [[ "$ABS_INIT" == "True" || "$ABS_INIT" == "true" ]]; then
+        ok "Admin account already exists"
+    elif [[ -z "$ADMIN_PASSWORD" || "$ADMIN_PASSWORD" == "changeme" ]]; then
+        skip "Skipping Audiobookshelf setup — set ADMIN_PASSWORD in .env first"
+    else
+        ABS_USER="${ADMIN_USER:-admin}"
+        ABS_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$ABS_URL/init" \
+            -H "Content-Type: application/json" \
+            -d "{\"newRoot\":{\"username\":\"$ABS_USER\",\"password\":\"$ADMIN_PASSWORD\"}}")
+        if [[ "$ABS_RESP" == "200" ]]; then
+            ok "Created admin account ($ABS_USER)"
+        else
+            fail "Audiobookshelf /init returned HTTP $ABS_RESP"
+        fi
+    fi
+
+    # Extract API token for Homepage widget
+    if is_placeholder "AUDIOBOOKSHELF_API_KEY" && [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
+        abs_login=$(curl -s -X POST "$ABS_URL/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASSWORD}\"}" 2>/dev/null)
+        abs_token=$(echo "$abs_login" | python3 -c "import json,sys; print(json.load(sys.stdin)['user']['token'])" 2>/dev/null)
+        if [[ -n "$abs_token" ]]; then
+            set_env "AUDIOBOOKSHELF_API_KEY" "$abs_token"
+            ok "API token extracted"
+        else
+            fail "Could not extract Audiobookshelf API token"
+        fi
+    elif ! is_placeholder "AUDIOBOOKSHELF_API_KEY"; then
+        skip "AUDIOBOOKSHELF_API_KEY already set"
+    fi
+fi
+
+# ============================================================
 # Done
 # ============================================================
 echo ""
@@ -765,8 +995,4 @@ else
     echo -e " ${GRN}Configuration complete${NC}"
     echo "============================================================"
 fi
-echo ""
-echo "  Still manual (can't be automated):"
-echo "   • Uptime Kuma → create account and add monitors"
-echo "   • Audiobookshelf → create admin account"
 echo ""
