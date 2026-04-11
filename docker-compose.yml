@@ -314,7 +314,6 @@ services:
     container_name: audiobookshelf
     environment:
       - TZ=${TZ}
-      - ROUTER_BASE_PATH=/
     volumes:
       - ./config/audiobookshelf:/config
       - ./config/audiobookshelf/metadata:/metadata

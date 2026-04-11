@@ -8,7 +8,7 @@
 #   2.  Enable Docker on boot & create all directories
 #   3.  Start all containers
 #   4.  Complete the Jellyfin setup wizard via API
-#   5.  Install Jellyfin plugins (Playback Reporting, TMDb Box Sets, Intro Skipper, TheTVDB, Trakt)
+#   5.  Install Jellyfin plugins (Playback Reporting, TMDb Box Sets, Chapter Segments Provider, TheTVDB, Trakt)
 #   6.  Create Jellyfin libraries (Movies, TV Shows, Audiobooks)
 #   6.  Complete the Jellyseerr setup wizard via API
 #   7.  Extract all API keys from config files
@@ -683,35 +683,7 @@ set -o allexport; source "$ENV_FILE"; set +o allexport
 section "Jellyfin Plugins"
 
 if [[ -n "$JF_AUTH" ]]; then
-    JF_OFFICIAL_REPO="https://repo.jellyfin.org/packages.json"
-    JF_IS_REPO="https://raw.githubusercontent.com/intro-skipper/intro-skipper/master/manifest.json"
-    JF_TRAKT_REPO="https://raw.githubusercontent.com/nickogl/jellyfin-plugin-trakt/master/manifest.json"
     _jf_new_plugins=0
-
-    # Ensure a plugin repository is registered in Jellyfin
-    _jf_add_repo() {
-        local rname="$1" rurl="$2"
-        local repos
-        repos=$(curl -sf "$JF_BASE/Repositories" -H "$JF_AUTH" 2>/dev/null || echo "[]")
-        if python3 -c "
-import json,sys
-repos=json.loads(sys.argv[1])
-exit(0 if any(r.get('Url')==sys.argv[2] for r in repos) else 1)" \
-                "$repos" "$rurl" 2>/dev/null; then
-            skip "Plugin repo '${rname}' already configured"
-        else
-            updated=$(python3 -c "
-import json,sys
-repos=json.loads(sys.argv[1])
-repos.append({'Name':sys.argv[2],'Url':sys.argv[3],'Enabled':True})
-print(json.dumps(repos))" "$repos" "$rname" "$rurl")
-            resp=$(http POST "$JF_BASE/Repositories" \
-                -H "$JF_AUTH" -H "Content-Type: application/json" \
-                -d "$updated")
-            ok_code "$resp" && ok "Plugin repo '${rname}' added" \
-                || fail "Failed to add plugin repo '${rname}' (HTTP $(code "$resp"))"
-        fi
-    }
 
     # Install a Jellyfin plugin by its catalog name (idempotent)
     _jf_install_plugin() {
@@ -760,16 +732,12 @@ else:
         fi
     }
 
-    # Register third-party repositories
-    _jf_add_repo "Intro Skipper" "$JF_IS_REPO"
-    _jf_add_repo "Trakt"        "$JF_TRAKT_REPO"
-
-    # Install plugins
-    _jf_install_plugin "Playback Reporting"   # viewing statistics dashboard
-    _jf_install_plugin "TMDb Box Sets"        # auto-create movie collections from TMDb
-    _jf_install_plugin "Intro Skipper"        # auto-detect and skip TV intros/credits
-    _jf_install_plugin "TheTVDB"              # TVDB metadata for TV shows & movies
-    _jf_install_plugin "Trakt"                # scrobble watch history to Trakt.tv
+    # All plugins are in the official Jellyfin stable catalog — no extra repos needed
+    _jf_install_plugin "Playback Reporting"         # viewing statistics dashboard
+    _jf_install_plugin "TMDb Box Sets"              # auto-create movie collections from TMDb
+    _jf_install_plugin "Chapter Segments Provider"  # detect and skip intros/credits/outros
+    _jf_install_plugin "TheTVDB"                    # TVDB metadata for TV shows & movies
+    _jf_install_plugin "Trakt"                      # scrobble watch history to Trakt.tv
 
     # Restart Jellyfin only when new plugins were actually installed
     if (( _jf_new_plugins > 0 )); then

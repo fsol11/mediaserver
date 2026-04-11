@@ -46,6 +46,9 @@ die()     { echo -e "${RED}FATAL:${NC} $*"; exit 1; }
 # Check a key isn't still a placeholder
 is_placeholder() { local v; v=$(grep -m1 "^${1}=" "$ENV_FILE" | cut -d= -f2-); [[ -z "$v" || "$v" == *"your_"* ]]; }
 
+# Write a key=value into .env and update the current shell variable
+set_env() { sed -i "s|^${1}=.*|${1}=${2}|" "$ENV_FILE"; export "${1}=${2}"; }
+
 # ── JSON helpers (python3 primary, jq fallback, grep last resort) ──
 json_get() {
     local json="$1" key="$2"
@@ -634,34 +637,24 @@ JSON
         || fail "Failed to connect Sonarr (HTTP $(code "$resp")): $(body "$resp")"
 fi
 
-# 6c. Authentication
+# 6c. Authentication — must be set directly in config.yaml (API ignores auth writes)
 if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
-    bazarr_auth_type=$(body "$current" | python3 -c "
-import json,sys
-try:
-    d=json.load(sys.stdin)
-    print(d.get('auth',{}).get('type') or '')
-except: print('')
-" 2>/dev/null)
-    if [[ -n "$bazarr_auth_type" ]]; then
-        skip "Authentication already enabled"
+    BAZARR_CFG_AUTH="$STACK_DIR/config/bazarr/config/config.yaml"
+    [[ ! -f "$BAZARR_CFG_AUTH" ]] && BAZARR_CFG_AUTH="$STACK_DIR/config/bazarr/config.yaml"
+    if [[ -f "$BAZARR_CFG_AUTH" ]]; then
+        bazarr_auth_type=$(grep -A4 '^auth:' "$BAZARR_CFG_AUTH" | grep 'type:' | awk '{print $2}')
+        if [[ -n "$bazarr_auth_type" && "$bazarr_auth_type" != "null" ]]; then
+            skip "Authentication already enabled in Bazarr"
+        else
+            # Bazarr stores the password as MD5
+            bazarr_pw_hash=$(python3 -c "import hashlib; print(hashlib.md5('${ADMIN_PASSWORD}'.encode()).hexdigest())")
+            sed -i "s/^  type: null/  type: form/" "$BAZARR_CFG_AUTH"
+            sed -i "/^auth:/,/^[^ ]/{s/^  username: .*/  username: ${ADMIN_USER}/; s/^  password: .*/  password: ${bazarr_pw_hash}/}" "$BAZARR_CFG_AUTH"
+            docker restart bazarr &>/dev/null
+            ok "Authentication enabled (${ADMIN_USER}) — Bazarr restarting"
+        fi
     else
-        auth_payload=$(cat <<JSON
-{
-  "auth": {
-    "type": "form",
-    "username": "${ADMIN_USER}",
-    "password": "${ADMIN_PASSWORD}"
-  }
-}
-JSON
-)
-        resp=$(http POST "$BAZARR_BASE/api/system/settings" \
-            -H "X-API-KEY: $BAZARR_KEY" \
-            -H "Content-Type: application/json" \
-            -d "$auth_payload")
-        ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
-            || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
+        fail "Bazarr config.yaml not found — cannot set authentication"
     fi
 fi
 
@@ -1374,7 +1367,7 @@ monitors = [
     ("qBittorrent",    "http://qbittorrent:8080"),
     ("Bazarr",         "http://bazarr:6767"),
     ("Homepage",       "http://homepage:3000"),
-    ("Audiobookshelf", "http://audiobookshelf:13378"),
+    ("Audiobookshelf", "http://audiobookshelf:80/audiobookshelf/ping"),
     ("FlareSolverr",   "http://flaresolverr:8191"),
 ]
 
@@ -1443,6 +1436,25 @@ else
         fi
     elif ! is_placeholder "AUDIOBOOKSHELF_API_KEY"; then
         skip "AUDIOBOOKSHELF_API_KEY already set"
+    fi
+
+    # Create Audiobooks library if none exist
+    ABS_TOKEN="${abs_token:-${AUDIOBOOKSHELF_API_KEY:-}}"
+    if [[ -n "$ABS_TOKEN" ]]; then
+        abs_lib_count=$(curl -s "$ABS_URL/api/libraries" \
+            -H "Authorization: Bearer $ABS_TOKEN" | \
+            python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d) if isinstance(d,list) else len(d.get('libraries',[])))" 2>/dev/null)
+        if [[ "${abs_lib_count:-0}" -eq 0 ]]; then
+            abs_lib_resp=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$ABS_URL/api/libraries" \
+                -H "Authorization: Bearer $ABS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d '{"name":"Audiobooks","folders":[{"fullPath":"/audiobooks"}],"icon":"audiobookshelf","mediaType":"book","provider":"audible","settings":{"coverAspectRatio":1,"disableWatcher":false,"skipMatchingMediaWithAsin":false,"skipMatchingMediaWithIsbn":false,"autoScanCronExpression":""}}')
+            [[ "$abs_lib_resp" == "200" ]] \
+                && ok "Audiobooks library created" \
+                || fail "Failed to create Audiobooks library (HTTP $abs_lib_resp)"
+        else
+            skip "Audiobooks library already exists"
+        fi
     fi
 fi
 
