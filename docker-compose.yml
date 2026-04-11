@@ -283,6 +283,9 @@ services:
     volumes:
       - ./config/homepage:/app/config
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DATA_ROOT}:${DATA_ROOT}:ro
+    group_add:
+      - "${DOCKER_GID}"  # docker group - gives read access to docker.sock
     ports:
       - "3000:3000"
     networks:
@@ -294,7 +297,7 @@ services:
   # WebUI: http://localhost:3001
   # ============================================================
   uptime-kuma:
-    image: louislam/uptime-kuma:1
+    image: louislam/uptime-kuma:2
     container_name: uptime-kuma
     volumes:
       - ./config/uptime-kuma:/app/data

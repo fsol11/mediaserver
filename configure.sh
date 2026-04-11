@@ -35,6 +35,15 @@ TZ=$(timedatectl show --property=Timezone --value 2>/dev/null) \
 if [[ ! -f "$ENV_FILE" ]]; then echo "ERROR: $ENV_FILE not found"; exit 1; fi
 set -o allexport; source "$ENV_FILE"; set +o allexport
 
+# ── Map PREFERRED_QUALITY → Radarr/Sonarr profile name ────
+case "${PREFERRED_QUALITY:-1080p}" in
+    720p)       QP_PROFILE_NAME="HD-720p"  ;;
+    4k|2160p)   QP_PROFILE_NAME="Ultra-HD" ;;
+    *)          QP_PROFILE_NAME="HD-1080p" ;;  # default: 1080p
+esac
+# Terms to block in release titles (cam/screener quality)
+CAM_IGNORE="CAM,TELESYNC,TELECINE,WORKPRINT,CAMRIP,HDCAM,DVDSCR,SCREENER,PDVD"
+
 # ── Colours / helpers ──────────────────────────────────────
 GRN='\033[0;32m'; YLW='\033[1;33m'; RED='\033[0;31m'; BLD='\033[1m'; NC='\033[0m'
 ok()      { echo -e "  ${GRN}✓${NC}  $*"; }
@@ -268,6 +277,74 @@ print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
     fi
 fi
 
+# 3d. Quality profile — apply to all existing movies
+_radarr_profiles=$(arr_get "$RADARR_BASE/api/v3/qualityprofile" "$RADARR_KEY")
+_qp_id=$(body "$_radarr_profiles" | python3 -c "
+import json,sys
+ps=json.load(sys.stdin)
+p=next((x for x in ps if x['name']=='${QP_PROFILE_NAME}'), None)
+print(p['id'] if p else '')" 2>/dev/null)
+if [[ -z "$_qp_id" ]]; then
+    skip "Quality profile '${QP_PROFILE_NAME}' not found in Radarr — skipping"
+else
+    _movie_ids=$(body "$(arr_get "$RADARR_BASE/api/v3/movie" "$RADARR_KEY")" | python3 -c "
+import json,sys
+ms=json.load(sys.stdin)
+ids=[m['id'] for m in ms if m.get('qualityProfileId') != ${_qp_id}]
+print(' '.join(map(str,ids)))" 2>/dev/null)
+    if [[ -z "$_movie_ids" ]]; then
+        skip "All Radarr movies already on '${QP_PROFILE_NAME}' profile"
+    else
+        _ids_json=$(echo "$_movie_ids" | python3 -c "import sys; print('['+','.join(sys.stdin.read().split())+']')")
+        resp=$(arr_put "$RADARR_BASE/api/v3/movie/editor" "$RADARR_KEY" \
+            "{\"movieIds\":${_ids_json},\"qualityProfileId\":${_qp_id}}")
+        ok_code "$resp" && ok "Radarr: quality profile set to '${QP_PROFILE_NAME}' for all movies" \
+            || fail "Failed to update Radarr quality profile (HTTP $(code "$resp"))"
+    fi
+fi
+
+# 3e. Block cam/pre-release sources via Custom Format (Radarr v3)
+_cf_resp=$(arr_get "$RADARR_BASE/api/v3/customformat" "$RADARR_KEY")
+if body "$_cf_resp" | python3 -c "
+import json,sys
+items=json.load(sys.stdin)
+print('found' if any(i.get('name')=='Cam/Screener' for i in items) else 'missing')
+" 2>/dev/null | grep -q "found"; then
+    skip "Cam/Screener custom format already in Radarr"
+else
+    _cf_payload=$(cat <<'CFEOF'
+{
+  "name": "Cam/Screener",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [{
+    "name": "Cam/Screener Patterns",
+    "implementation": "ReleaseTitleSpecification",
+    "negate": false,
+    "required": false,
+    "fields": [{"name": "value", "value": "(?i)\\b(CAM|CAMRIP|HDCAM|TELESYNC|TELECINE|WORKPRINT|DVDSCR|SCREENER|PDVD)\\b"}]
+  }]
+}
+CFEOF
+)
+    _cf_create=$(arr_post "$RADARR_BASE/api/v3/customformat" "$RADARR_KEY" "$_cf_payload")
+    if ok_code "$_cf_create"; then
+        _cf_id=$(body "$_cf_create" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+        # Apply score of -9999 to this CF on the quality profile
+        _prof_resp=$(arr_get "$RADARR_BASE/api/v3/qualityprofile/${_qp_id:-4}" "$RADARR_KEY")
+        _updated_prof=$(body "$_prof_resp" | python3 -c "
+import json,sys
+p=json.load(sys.stdin)
+p['formatItems'].append({'format': ${_cf_id:-0}, 'name': 'Cam/Screener', 'score': -9999})
+print(json.dumps(p))" 2>/dev/null)
+        if [[ -n "$_updated_prof" && -n "${_cf_id:-}" ]]; then
+            arr_put "$RADARR_BASE/api/v3/qualityprofile/${_qp_id:-4}" "$RADARR_KEY" "$_updated_prof" >/dev/null
+        fi
+        ok "Radarr: Cam/Screener custom format added (score -9999 on ${QP_PROFILE_NAME})"
+    else
+        fail "Failed to add Radarr custom format (HTTP $(code "$_cf_create")): $(body "$_cf_create")"
+    fi
+fi
+
 # ============================================================
 # 4. SONARR — Download client + root folder
 # ============================================================
@@ -349,6 +426,48 @@ print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
         ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
             || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
     fi
+fi
+
+# 4d. Quality profile — apply to all existing series
+_sonarr_profiles=$(arr_get "$SONARR_BASE/api/v3/qualityprofile" "$SONARR_KEY")
+_sqp_id=$(body "$_sonarr_profiles" | python3 -c "
+import json,sys
+ps=json.load(sys.stdin)
+p=next((x for x in ps if x['name']=='${QP_PROFILE_NAME}'), None)
+print(p['id'] if p else '')" 2>/dev/null)
+if [[ -z "$_sqp_id" ]]; then
+    skip "Quality profile '${QP_PROFILE_NAME}' not found in Sonarr — skipping"
+else
+    _series_ids=$(body "$(arr_get "$SONARR_BASE/api/v3/series" "$SONARR_KEY")" | python3 -c "
+import json,sys
+ss=json.load(sys.stdin)
+ids=[s['id'] for s in ss if s.get('qualityProfileId') != ${_sqp_id}]
+print(' '.join(map(str,ids)))" 2>/dev/null)
+    if [[ -z "$_series_ids" ]]; then
+        skip "All Sonarr series already on '${QP_PROFILE_NAME}' profile"
+    else
+        _sids_json=$(echo "$_series_ids" | python3 -c "import sys; print('['+','.join(sys.stdin.read().split())+']')")
+        resp=$(arr_put "$SONARR_BASE/api/v3/series/editor" "$SONARR_KEY" \
+            "{\"seriesIds\":${_sids_json},\"qualityProfileId\":${_sqp_id}}")
+        ok_code "$resp" && ok "Sonarr: quality profile set to '${QP_PROFILE_NAME}' for all series" \
+            || fail "Failed to update Sonarr quality profile (HTTP $(code "$resp"))"
+    fi
+fi
+
+# 4e. Block cam/pre-release sources via release profile
+_relp_resp=$(arr_get "$SONARR_BASE/api/v3/releaseprofile" "$SONARR_KEY")
+if body "$_relp_resp" | python3 -c "
+import json,sys
+items=json.load(sys.stdin)
+print('found' if any('CAM' in (i.get('ignored') or []) for i in items) else 'missing')
+" 2>/dev/null | grep -q "found"; then
+    skip "Cam/screener release profile already in Sonarr"
+else
+    _cam_arr=$(echo "$CAM_IGNORE" | python3 -c "import sys; vals=sys.stdin.read().split(','); print('['+','.join('\"'+v.strip()+'\"' for v in vals)+']')")
+    resp=$(arr_post "$SONARR_BASE/api/v3/releaseprofile" "$SONARR_KEY" \
+        "{\"name\":\"Block Cam/Screener\",\"enabled\":true,\"required\":[],\"ignored\":${_cam_arr},\"indexerId\":0,\"tags\":[]}")
+    ok_code "$resp" && ok "Sonarr: cam/screener release profile added" \
+        || fail "Failed to add Sonarr release profile (HTTP $(code "$resp")): $(body "$resp")"
 fi
 
 # ============================================================
@@ -736,7 +855,8 @@ except: print(False)
 import json,sys
 try:
     ps=json.load(sys.stdin)
-    p=next((x for x in ps if x['name']=='Any'), ps[0] if ps else None)
+    p=next((x for x in ps if x['name']=='${QP_PROFILE_NAME}'), \
+       next((x for x in ps if x['name']=='Any'), ps[0] if ps else None))
     print(p['id'] if p else 1)
 except: print(1)
 " 2>/dev/null)
@@ -744,9 +864,10 @@ except: print(1)
 import json,sys
 try:
     ps=json.load(sys.stdin)
-    p=next((x for x in ps if x['name']=='Any'), ps[0] if ps else None)
-    print(p['name'] if p else 'Any')
-except: print('Any')
+    p=next((x for x in ps if x['name']=='${QP_PROFILE_NAME}'), \
+       next((x for x in ps if x['name']=='Any'), ps[0] if ps else None))
+    print(p['name'] if p else '${QP_PROFILE_NAME}')
+except: print('${QP_PROFILE_NAME}')
 " 2>/dev/null)
 
         # Get Sonarr quality profiles
@@ -755,7 +876,8 @@ except: print('Any')
 import json,sys
 try:
     ps=json.load(sys.stdin)
-    p=next((x for x in ps if x['name']=='Any'), ps[0] if ps else None)
+    p=next((x for x in ps if x['name']=='${QP_PROFILE_NAME}'), \
+       next((x for x in ps if x['name']=='Any'), ps[0] if ps else None))
     print(p['id'] if p else 1)
 except: print(1)
 " 2>/dev/null)
@@ -763,9 +885,10 @@ except: print(1)
 import json,sys
 try:
     ps=json.load(sys.stdin)
-    p=next((x for x in ps if x['name']=='Any'), ps[0] if ps else None)
-    print(p['name'] if p else 'Any')
-except: print('Any')
+    p=next((x for x in ps if x['name']=='${QP_PROFILE_NAME}'), \
+       next((x for x in ps if x['name']=='Any'), ps[0] if ps else None))
+    print(p['name'] if p else '${QP_PROFILE_NAME}')
+except: print('${QP_PROFILE_NAME}')
 " 2>/dev/null)
 
         # Check existing Radarr servers
@@ -971,7 +1094,7 @@ with open(sys.argv[1], 'w') as f:
 fi
 
 # ============================================================
-# 8b. JELLYFIN — Transcoding (NVIDIA GPU + 8 Mbps remote bitrate)
+# 8b. JELLYFIN — Transcoding (NVIDIA GPU + remote bitrate limit)
 #     If NVIDIA GPU is present in the container, enable NVENC
 #     hardware transcoding and set remote bitrate limit to 8 Mbps.
 # ============================================================
@@ -1052,13 +1175,13 @@ with open(sys.argv[1], 'w') as f:
         skip "No NVIDIA GPU in Jellyfin container — skipping hardware transcoding"
     fi
 
-    # Set server-wide remote client bitrate limit to 8 Mbps
-    DESIRED_BITRATE=8000000
+    # Set server-wide remote client bitrate from JELLYFIN_MAX_BITRATE (Mbps; 0 = unlimited)
+    DESIRED_BITRATE=$(( ${JELLYFIN_MAX_BITRATE:-10} * 1000000 ))
     current_config=$(curl -sf "$JF_BASE/System/Configuration" -H "$JF_AUTH" 2>/dev/null)
     current_bitrate=$(echo "$current_config" | python3 -c "import json,sys; print(json.load(sys.stdin).get('RemoteClientBitrateLimit',0))" 2>/dev/null || echo "0")
 
     if [[ "$current_bitrate" == "$DESIRED_BITRATE" ]]; then
-        skip "Remote client bitrate limit already 8 Mbps"
+        skip "Remote client bitrate limit already ${JELLYFIN_MAX_BITRATE:-10} Mbps"
     else
         # Update the config via API
         updated_config=$(echo "$current_config" | python3 -c "
@@ -1072,7 +1195,7 @@ json.dump(cfg, sys.stdout)
             -H "Content-Type: application/json" \
             -d "$updated_config" -w "\n%{http_code}" 2>/dev/null)
         if [[ "$(echo "$resp" | tail -1)" == "204" || "$(echo "$resp" | tail -1)" == "200" ]]; then
-            ok "Remote client bitrate limit set to 8 Mbps"
+            ok "Remote client bitrate limit set to ${JELLYFIN_MAX_BITRATE:-10} Mbps"
         else
             fail "Failed to set remote bitrate limit (HTTP $(echo "$resp" | tail -1))"
         fi
@@ -1455,6 +1578,15 @@ else
         else
             skip "Audiobooks library already exists"
         fi
+
+        # Apply default server settings (idempotent — safe to re-run)
+        abs_settings_resp=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH "$ABS_URL/api/settings" \
+            -H "Authorization: Bearer $ABS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"chromecastEnabled":true,"sortingIgnorePrefix":true,"scannerFindCovers":true}')
+        [[ "$abs_settings_resp" == "200" ]] \
+            && ok "Server settings applied (Chromecast, ignore prefixes, find covers)" \
+            || fail "Failed to apply server settings (HTTP $abs_settings_resp)"
     fi
 fi
 

@@ -9,7 +9,7 @@
 #   3.  Start all containers
 #   4.  Complete the Jellyfin setup wizard via API
 #   5.  Install Jellyfin plugins (Playback Reporting, TMDb Box Sets, Chapter Segments Provider, TheTVDB, Trakt)
-#   6.  Create Jellyfin libraries (Movies, TV Shows, Audiobooks)
+#   6.  Create Jellyfin libraries (Movies, Series, Audiobooks)
 #   6.  Complete the Jellyseerr setup wizard via API
 #   7.  Extract all API keys from config files
 #   8.  Wire every service to every other service
@@ -202,6 +202,8 @@ TZ=$(timedatectl show --property=Timezone --value 2>/dev/null) \
     || TZ=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||') \
     || TZ="UTC"
 
+DOCKER_GID=$(getent group docker | cut -d: -f3 2>/dev/null || echo "999")
+
 # Generate .env if it doesn't exist
 if [[ ! -f "$ENV_FILE" ]]; then
     if [[ ! -f "$STACK_DIR/.env.initial" ]]; then
@@ -240,8 +242,21 @@ fi
 JF_USER="${ADMIN_USER:-}"
 JF_PASS="${ADMIN_PASSWORD:-}"
 
+# Write system-derived vars to .env so docker compose always has them,
+# even when run manually outside of install.sh (avoids "variable not set" warnings).
+for _var in PUID PGID TZ DOCKER_GID; do
+    _val="${!_var}"
+    if grep -q "^${_var}=" "$ENV_FILE" 2>/dev/null; then
+        sed -i "s|^${_var}=.*|${_var}=${_val}|" "$ENV_FILE"
+    else
+        echo "${_var}=${_val}" >> "$ENV_FILE"
+    fi
+done
+set -o allexport; source "$ENV_FILE"; set +o allexport
+
 ok "Running as:        $(id -un) (PUID=$PUID, PGID=$PGID)"
 ok "Timezone:          $TZ (auto-detected)"
+ok "Docker GID:        $DOCKER_GID (for homepage docker socket access)"
 [[ -n "$JF_USER" ]] && ok "Admin user:        $JF_USER" || ok "Admin user:        (credentials already used and removed)"
 echo ""
 echo -e "  ${GRN}Starting unattended setup...${NC}"
@@ -430,8 +445,8 @@ else
     die "Failed to pull one or more Docker images"
 fi
 
-if docker compose -f "$STACK_DIR/docker-compose.yml" up -d --remove-orphans; then
-    ok "All containers started"
+if docker compose -f "$STACK_DIR/docker-compose.yml" up -d --remove-orphans --pull always; then
+    ok "All containers started / updated to latest images"
 else
     die "Failed to start one or more containers"
 fi
@@ -633,7 +648,7 @@ else:
     }
 
     _add_library "Movies"     "movies"  "/data/movies"
-    _add_library "TV Shows"   "tvshows" "/data/tvshows"
+    _add_library "Series"     "tvshows" "/data/tvshows"
     _add_library "Audiobooks" "books"   "/data/audiobooks"
 
     # ── FFmpeg path ────────────────────────────────────────────
