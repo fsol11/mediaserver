@@ -277,29 +277,48 @@ print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
     fi
 fi
 
-# 3d. Quality profile — apply to all existing movies
-_radarr_profiles=$(arr_get "$RADARR_BASE/api/v3/qualityprofile" "$RADARR_KEY")
-_qp_id=$(body "$_radarr_profiles" | python3 -c "
+# 3d. Quality profile — apply only when PREFERRED_QUALITY is set and all movies are still
+# on the default 'Any' profile (i.e. never customised via the UI).
+if [[ -z "${PREFERRED_QUALITY:-}" ]]; then
+    skip "PREFERRED_QUALITY not set — skipping Radarr quality profile"
+else
+    _radarr_qp_body=$(body "$(arr_get "$RADARR_BASE/api/v3/qualityprofile" "$RADARR_KEY")")
+    _qp_id=$(echo "$_radarr_qp_body" | python3 -c "
 import json,sys
 ps=json.load(sys.stdin)
 p=next((x for x in ps if x['name']=='${QP_PROFILE_NAME}'), None)
 print(p['id'] if p else '')" 2>/dev/null)
-if [[ -z "$_qp_id" ]]; then
-    skip "Quality profile '${QP_PROFILE_NAME}' not found in Radarr — skipping"
-else
-    _movie_ids=$(body "$(arr_get "$RADARR_BASE/api/v3/movie" "$RADARR_KEY")" | python3 -c "
+    _any_id=$(echo "$_radarr_qp_body" | python3 -c "
+import json,sys
+ps=json.load(sys.stdin)
+p=next((x for x in ps if x['name']=='Any'), None)
+print(p['id'] if p else '0')" 2>/dev/null)
+    if [[ -z "$_qp_id" ]]; then
+        skip "Quality profile '${QP_PROFILE_NAME}' not found in Radarr — skipping"
+    else
+        _radarr_movies_body=$(body "$(arr_get "$RADARR_BASE/api/v3/movie" "$RADARR_KEY")")
+        _all_on_default=$(echo "$_radarr_movies_body" | python3 -c "
 import json,sys
 ms=json.load(sys.stdin)
-ids=[m['id'] for m in ms if m.get('qualityProfileId') != ${_qp_id}]
-print(' '.join(map(str,ids)))" 2>/dev/null)
-    if [[ -z "$_movie_ids" ]]; then
-        skip "All Radarr movies already on '${QP_PROFILE_NAME}' profile"
-    else
-        _ids_json=$(echo "$_movie_ids" | python3 -c "import sys; print('['+','.join(sys.stdin.read().split())+']')")
-        resp=$(arr_put "$RADARR_BASE/api/v3/movie/editor" "$RADARR_KEY" \
-            "{\"movieIds\":${_ids_json},\"qualityProfileId\":${_qp_id}}")
-        ok_code "$resp" && ok "Radarr: quality profile set to '${QP_PROFILE_NAME}' for all movies" \
-            || fail "Failed to update Radarr quality profile (HTTP $(code "$resp"))"
+any_id=int('${_any_id:-0}' or 0)
+print('yes' if all(m.get('qualityProfileId')==any_id for m in ms) else 'no')" 2>/dev/null)
+        if [[ "$_all_on_default" != "yes" ]]; then
+            skip "Radarr quality profiles already customised — skipping to preserve UI changes"
+        else
+            _movie_ids=$(echo "$_radarr_movies_body" | python3 -c "
+import json,sys
+ms=json.load(sys.stdin)
+print(' '.join(str(m['id']) for m in ms))" 2>/dev/null)
+            if [[ -z "$_movie_ids" ]]; then
+                skip "No movies in Radarr yet — nothing to update"
+            else
+                _ids_json=$(echo "$_movie_ids" | python3 -c "import sys; print('['+','.join(sys.stdin.read().split())+']')")
+                resp=$(arr_put "$RADARR_BASE/api/v3/movie/editor" "$RADARR_KEY" \
+                    "{\"movieIds\":${_ids_json},\"qualityProfileId\":${_qp_id}}")
+                ok_code "$resp" && ok "Radarr: quality profile set to '${QP_PROFILE_NAME}' for all movies" \
+                    || fail "Failed to update Radarr quality profile (HTTP $(code "$resp"))"
+            fi
+        fi
     fi
 fi
 
@@ -428,29 +447,48 @@ print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
     fi
 fi
 
-# 4d. Quality profile — apply to all existing series
-_sonarr_profiles=$(arr_get "$SONARR_BASE/api/v3/qualityprofile" "$SONARR_KEY")
-_sqp_id=$(body "$_sonarr_profiles" | python3 -c "
+# 4d. Quality profile — apply only when PREFERRED_QUALITY is set and all series are still
+# on the default 'Any' profile (i.e. never customised via the UI).
+if [[ -z "${PREFERRED_QUALITY:-}" ]]; then
+    skip "PREFERRED_QUALITY not set — skipping Sonarr quality profile"
+else
+    _sonarr_qp_body=$(body "$(arr_get "$SONARR_BASE/api/v3/qualityprofile" "$SONARR_KEY")")
+    _sqp_id=$(echo "$_sonarr_qp_body" | python3 -c "
 import json,sys
 ps=json.load(sys.stdin)
 p=next((x for x in ps if x['name']=='${QP_PROFILE_NAME}'), None)
 print(p['id'] if p else '')" 2>/dev/null)
-if [[ -z "$_sqp_id" ]]; then
-    skip "Quality profile '${QP_PROFILE_NAME}' not found in Sonarr — skipping"
-else
-    _series_ids=$(body "$(arr_get "$SONARR_BASE/api/v3/series" "$SONARR_KEY")" | python3 -c "
+    _sany_id=$(echo "$_sonarr_qp_body" | python3 -c "
+import json,sys
+ps=json.load(sys.stdin)
+p=next((x for x in ps if x['name']=='Any'), None)
+print(p['id'] if p else '0')" 2>/dev/null)
+    if [[ -z "$_sqp_id" ]]; then
+        skip "Quality profile '${QP_PROFILE_NAME}' not found in Sonarr — skipping"
+    else
+        _sonarr_series_body=$(body "$(arr_get "$SONARR_BASE/api/v3/series" "$SONARR_KEY")")
+        _sall_on_default=$(echo "$_sonarr_series_body" | python3 -c "
 import json,sys
 ss=json.load(sys.stdin)
-ids=[s['id'] for s in ss if s.get('qualityProfileId') != ${_sqp_id}]
-print(' '.join(map(str,ids)))" 2>/dev/null)
-    if [[ -z "$_series_ids" ]]; then
-        skip "All Sonarr series already on '${QP_PROFILE_NAME}' profile"
-    else
-        _sids_json=$(echo "$_series_ids" | python3 -c "import sys; print('['+','.join(sys.stdin.read().split())+']')")
-        resp=$(arr_put "$SONARR_BASE/api/v3/series/editor" "$SONARR_KEY" \
-            "{\"seriesIds\":${_sids_json},\"qualityProfileId\":${_sqp_id}}")
-        ok_code "$resp" && ok "Sonarr: quality profile set to '${QP_PROFILE_NAME}' for all series" \
-            || fail "Failed to update Sonarr quality profile (HTTP $(code "$resp"))"
+any_id=int('${_sany_id:-0}' or 0)
+print('yes' if all(s.get('qualityProfileId')==any_id for s in ss) else 'no')" 2>/dev/null)
+        if [[ "$_sall_on_default" != "yes" ]]; then
+            skip "Sonarr quality profiles already customised — skipping to preserve UI changes"
+        else
+            _series_ids=$(echo "$_sonarr_series_body" | python3 -c "
+import json,sys
+ss=json.load(sys.stdin)
+print(' '.join(str(s['id']) for s in ss))" 2>/dev/null)
+            if [[ -z "$_series_ids" ]]; then
+                skip "No series in Sonarr yet — nothing to update"
+            else
+                _sids_json=$(echo "$_series_ids" | python3 -c "import sys; print('['+','.join(sys.stdin.read().split())+']')")
+                resp=$(arr_put "$SONARR_BASE/api/v3/series/editor" "$SONARR_KEY" \
+                    "{\"seriesIds\":${_sids_json},\"qualityProfileId\":${_sqp_id}}")
+                ok_code "$resp" && ok "Sonarr: quality profile set to '${QP_PROFILE_NAME}' for all series" \
+                    || fail "Failed to update Sonarr quality profile (HTTP $(code "$resp"))"
+            fi
+        fi
     fi
 fi
 
@@ -1175,13 +1213,19 @@ with open(sys.argv[1], 'w') as f:
         skip "No NVIDIA GPU in Jellyfin container — skipping hardware transcoding"
     fi
 
-    # Set server-wide remote client bitrate from JELLYFIN_MAX_BITRATE (Mbps; 0 = unlimited)
-    DESIRED_BITRATE=$(( ${JELLYFIN_MAX_BITRATE:-10} * 1000000 ))
+    # Set server-wide remote client bitrate from JELLYFIN_MAX_BITRATE (Mbps; 0 = unlimited).
+    # Applied only when the env value is non-zero and Jellyfin still has the default (0 = unlimited),
+    # so any value set via the UI is never overwritten.
+    DESIRED_BITRATE=$(( ${JELLYFIN_MAX_BITRATE:-0} * 1000000 ))
     current_config=$(curl -sf "$JF_BASE/System/Configuration" -H "$JF_AUTH" 2>/dev/null)
     current_bitrate=$(echo "$current_config" | python3 -c "import json,sys; print(json.load(sys.stdin).get('RemoteClientBitrateLimit',0))" 2>/dev/null || echo "0")
 
-    if [[ "$current_bitrate" == "$DESIRED_BITRATE" ]]; then
-        skip "Remote client bitrate limit already ${JELLYFIN_MAX_BITRATE:-10} Mbps"
+    if [[ -z "${JELLYFIN_MAX_BITRATE:-}" ]]; then
+        skip "JELLYFIN_MAX_BITRATE not set — remote bitrate limit not configured"
+    elif [[ "$current_bitrate" != "0" ]]; then
+        skip "Remote client bitrate already set ($(( current_bitrate / 1000000 )) Mbps) — skipping to preserve UI changes"
+    elif [[ "$DESIRED_BITRATE" -eq 0 ]]; then
+        skip "JELLYFIN_MAX_BITRATE=0 — remote bitrate unlimited (Jellyfin default, nothing to set)"
     else
         # Update the config via API
         updated_config=$(echo "$current_config" | python3 -c "
