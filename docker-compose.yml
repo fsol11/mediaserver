@@ -73,7 +73,7 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
     volumes:
-      - ./config/radarr:/config
+      - /home/john/radarr-config:/config
       - "${DIR_MOVIES}:/movies"
       - "${DIR_DOWNLOADS}:/downloads"
     ports:
