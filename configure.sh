@@ -178,8 +178,16 @@ print(json.dumps({
             cred_resp=$(curl -s -o /dev/null -w "%{http_code}" -b "$QBIT_COOKIE" \
                 -X POST "http://localhost:8080/api/v2/app/setPreferences" \
                 --data-urlencode "json=$prefs_json")
-            [[ "$cred_resp" == "200" ]] && ok "Credentials updated to ${ADMIN_USER:-admin}" \
-                || fail "Could not update credentials (HTTP $cred_resp)"
+            if [[ "$cred_resp" == "200" ]]; then
+                ok "Credentials updated to ${ADMIN_USER:-admin}"
+                # Re-authenticate with the new credentials so the cookie stays valid
+                login_resp=$(curl -sc "$QBIT_COOKIE" -X POST "http://localhost:8080/api/v2/auth/login" \
+                    --data-urlencode "username=${ADMIN_USER:-admin}" \
+                    --data-urlencode "password=${ADMIN_PASSWORD:-adminadmin}" 2>/dev/null)
+                [[ "$login_resp" == "Ok." ]] || fail "Re-login with new credentials failed"
+            else
+                fail "Could not update credentials (HTTP $cred_resp)"
+            fi
         fi
     fi
 fi
@@ -615,6 +623,7 @@ d['authenticationMethod']='forms'
 d['authenticationRequired']='enabled'
 d['username']=sys.argv[2]
 d['password']=sys.argv[3]
+d['passwordConfirmation']=sys.argv[3]
 print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
         resp=$(arr_put "$PROWLARR_BASE/api/v1/config/host/$host_id" "$PROWLARR_KEY" "$auth_payload")
         ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
@@ -1217,7 +1226,14 @@ with open(sys.argv[1], 'w') as f:
     # Applied only when the env value is non-zero and Jellyfin still has the default (0 = unlimited),
     # so any value set via the UI is never overwritten.
     DESIRED_BITRATE=$(( ${JELLYFIN_MAX_BITRATE:-0} * 1000000 ))
-    current_config=$(curl -sf "$JF_BASE/System/Configuration" -H "$JF_AUTH" 2>/dev/null)
+    # Wait for Jellyfin config API to be fully ready (health endpoint responds before API is initialized)
+    _jf_api_wait=0
+    current_config=""
+    while (( _jf_api_wait < 120 )); do
+        current_config=$(curl -sf "$JF_BASE/System/Configuration" -H "$JF_AUTH" 2>/dev/null)
+        [[ -n "$current_config" ]] && break
+        sleep 3; _jf_api_wait=$((_jf_api_wait + 3))
+    done
     current_bitrate=$(echo "$current_config" | python3 -c "import json,sys; print(json.load(sys.stdin).get('RemoteClientBitrateLimit',0))" 2>/dev/null || echo "0")
 
     if [[ -z "${JELLYFIN_MAX_BITRATE:-}" ]]; then
@@ -1482,83 +1498,101 @@ fi
 # ============================================================
 # 10. UPTIME KUMA — Create account + add monitors
 # ============================================================
+# Note: uptime-kuma:2 initialises Express before socket.io, so the SPA
+# catch-all handler intercepts all socket.io polling and WebSocket upgrade
+# requests.  The Python uptime_kuma_api library (which uses socket.io) cannot
+# connect as a result.  We work around this by talking to the SQLite database
+# directly via docker exec, exactly as Uptime Kuma's own reset-password.js does.
+# ============================================================
 section "Uptime Kuma"
 
-if python3 -c "import uptime_kuma_api" &>/dev/null; then
-    python3 - <<'PYEOF'
-import os, sys
-try:
-    from uptime_kuma_api import UptimeKumaApi, MonitorType
-except ImportError:
-    print("  \033[1;33m\u2013\033[0m  uptime-kuma-api not installed \u2014 skipping")
-    sys.exit(0)
+wait_http "http://localhost:3001" "Uptime Kuma" 60 || { fail "Uptime Kuma not responding — skipping"; }
 
-try:
-    api = UptimeKumaApi("http://localhost:3001", timeout=10)
-except Exception as e:
-    print(f"  \033[0;31m\u2717\033[0m  Cannot connect to Uptime Kuma: {e}")
-    sys.exit(0)
-
-user = os.environ.get("ADMIN_USER", "admin")
-pw = os.environ.get("ADMIN_PASSWORD", "")
-
-# Create admin account if needed
-try:
-    if api.need_setup():
-        if not pw or pw == "changeme":
-            print("  \033[1;33m\u2013\033[0m  Skipping Uptime Kuma setup \u2014 set ADMIN_PASSWORD in .env first")
-            api.disconnect()
-            sys.exit(0)
-        api.setup(user, pw)
-        print(f"  \033[0;32m\u2713\033[0m  Admin account created: {user}")
-except Exception as e:
-    print(f"  \033[0;31m\u2717\033[0m  Failed to create account: {e}")
-    api.disconnect()
-    sys.exit(0)
-
-# Login
-try:
-    api.login(user, pw)
-except Exception as e:
-    print(f"  \033[1;33m\u2013\033[0m  Cannot login (account may already exist with different creds): {e}")
-    api.disconnect()
-    sys.exit(0)
-
-# Service monitors to add (container names on the Docker network)
-monitors = [
-    ("Jellyfin",       "http://jellyfin:8096"),
-    ("Jellyseerr",     "http://jellyseerr:5055"),
-    ("Radarr",         "http://radarr:7878"),
-    ("Sonarr",         "http://sonarr:8989"),
-    ("Prowlarr",       "http://prowlarr:9696"),
-    ("qBittorrent",    "http://qbittorrent:8080"),
-    ("Bazarr",         "http://bazarr:6767"),
-    ("Homepage",       "http://homepage:3000"),
-    ("Audiobookshelf", "http://audiobookshelf:80/audiobookshelf/ping"),
-    ("FlareSolverr",   "http://flaresolverr:8191"),
-]
-
-existing = {m["name"] for m in api.get_monitors()}
-added = 0
-for name, url in monitors:
-    if name in existing:
-        continue
-    try:
-        api.add_monitor(type=MonitorType.HTTP, name=name, url=url, interval=60, maxretries=3)
-        added += 1
-    except Exception as e:
-        print(f"  \033[0;31m\u2717\033[0m  Failed to add {name}: {e}")
-
-skipped = len(monitors) - added
-if added:
-    print(f"  \033[0;32m\u2713\033[0m  {added} monitor(s) added")
-if skipped == len(monitors):
-    print(f"  \033[1;33m\u2013\033[0m  All {skipped} monitors already exist")
-
-api.disconnect()
-PYEOF
+if [[ -z "${ADMIN_PASSWORD:-}" || "${ADMIN_PASSWORD:-}" == "changeme" ]]; then
+    skip "Uptime Kuma setup skipped — set ADMIN_PASSWORD in .env first"
 else
-    skip "uptime-kuma-api not installed \u2014 set up Uptime Kuma manually"
+    docker exec -i \
+        -e ADMIN_USER="${ADMIN_USER:-admin}" \
+        -e ADMIN_PASSWORD="${ADMIN_PASSWORD:-}" \
+        uptime-kuma node - <<JSEOF
+const sqlite3 = require('@louislam/sqlite3').verbose();
+const bcrypt  = require('bcryptjs');
+const db = new sqlite3.Database('/app/data/kuma.db');
+
+const user  = process.env.ADMIN_USER     || 'admin';
+const pw    = process.env.ADMIN_PASSWORD || '';
+
+const GRN = '\x1b[0;32m'; YLW = '\x1b[1;33m'; RED = '\x1b[0;31m'; NC = '\x1b[0m';
+const ok   = (m) => console.log('  ' + GRN + '✓' + NC + '  ' + m);
+const skip = (m) => console.log('  ' + YLW + '–' + NC + '  ' + m);
+const fail = (m) => console.log('  ' + RED + '✗' + NC + '  ' + m);
+
+const monitors = [
+    { name: 'Jellyfin',       url: 'http://jellyfin:8096'    },
+    { name: 'Jellyseerr',     url: 'http://jellyseerr:5055'  },
+    { name: 'Radarr',         url: 'http://radarr:7878'      },
+    { name: 'Sonarr',         url: 'http://sonarr:8989'      },
+    { name: 'Prowlarr',       url: 'http://prowlarr:9696'    },
+    { name: 'qBittorrent',    url: 'http://qbittorrent:8080' },
+    { name: 'Bazarr',         url: 'http://bazarr:6767'      },
+    { name: 'Homepage',       url: 'http://homepage:3000'    },
+    { name: 'Audiobookshelf', url: 'http://audiobookshelf:13378' },
+    { name: 'FlareSolverr',   url: 'http://flaresolverr:8191'},
+];
+
+db.serialize(async () => {
+    db.get('SELECT id FROM user WHERE username = ?', [user], async (err, row) => {
+        if (row) {
+            skip('Uptime Kuma admin account already exists (' + user + ')');
+        } else {
+            const hash = await bcrypt.hash(pw, 10);
+            db.run(
+                'INSERT INTO user (username, password, active) VALUES (?, ?, 1)',
+                [user, hash],
+                (e) => { if (e) fail('Failed to create account: ' + e.message); else ok('Admin account created: ' + user); }
+            );
+        }
+
+        // Get or wait for user_id
+        db.get('SELECT id FROM user WHERE username = ?', [user], (err2, userRow) => {
+            if (!userRow) { db.close(); return; }
+            const uid = userRow.id;
+
+            db.all('SELECT name FROM monitor WHERE user_id = ?', [uid], (err3, existing) => {
+                const existingNames = new Set((existing || []).map(m => m.name));
+                let added = 0;
+                let pending = monitors.length;
+
+                monitors.forEach(m => {
+                    if (existingNames.has(m.name)) {
+                        pending--;
+                        if (pending === 0) finish();
+                        return;
+                    }
+                    db.run(
+                        'INSERT INTO monitor (name, url, type, active, user_id, interval, maxretries, created_date) VALUES (?, ?, ?, 1, ?, 60, 3, datetime("now"))',
+                        [m.name, m.url, 'http', uid],
+                        (e) => {
+                            if (!e) added++;
+                            pending--;
+                            if (pending === 0) finish();
+                        }
+                    );
+                });
+
+                function finish() {
+                    const skipped = monitors.length - added;
+                    if (added > 0) ok(added + ' monitor(s) added');
+                    if (skipped === monitors.length) skip('All monitors already exist');
+                    db.close();
+                }
+            });
+        });
+    });
+});
+JSEOF
+    RET=$?
+    [[ $RET -ne 0 ]] && fail "Uptime Kuma setup via database failed (exit $RET)"
 fi
 
 # ============================================================

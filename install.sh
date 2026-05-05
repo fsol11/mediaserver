@@ -700,31 +700,48 @@ section "Jellyfin Plugins"
 if [[ -n "$JF_AUTH" ]]; then
     _jf_new_plugins=0
 
+    # Fetch the plugin catalog once into a temp file (retry until non-empty — Jellyfin loads it asynchronously)
+    # The catalog JSON is too large to pass as a shell argument; use a file and pipe to python stdin instead.
+    info "Fetching Jellyfin plugin catalog …"
+    _jf_pkgs_file=$(mktemp)
+    trap 'rm -f "$_jf_pkgs_file"' EXIT
+    _jf_catalog_ok=false
+    for _pkg_try in $(seq 1 20); do
+        curl -sf "$JF_BASE/Packages" -H "$JF_AUTH" 2>/dev/null > "$_jf_pkgs_file" || echo "[]" > "$_jf_pkgs_file"
+        python3 -c "import json,sys; assert len(json.load(open(sys.argv[1])))>0" "$_jf_pkgs_file" 2>/dev/null \
+            && { _jf_catalog_ok=true; break; }
+        sleep 6
+    done
+    if $_jf_catalog_ok; then
+        ok "Plugin catalog loaded"
+    else
+        fail "Plugin catalog empty after retries — skipping all plugins"
+    fi
+
     # Install a Jellyfin plugin by its catalog name (idempotent)
     _jf_install_plugin() {
         local pname="$1"
+        $_jf_catalog_ok || { fail "Plugin '${pname}' skipped (no catalog)"; return 1; }
         # Skip if already installed
         installed=$(curl -sf "$JF_BASE/Plugins" -H "$JF_AUTH" 2>/dev/null || echo "[]")
-        if python3 -c "
+        if echo "$installed" | python3 -c "
 import json,sys
-plugins=json.loads(sys.argv[1])
-exit(0 if any(p.get('Name','').lower()==sys.argv[2].lower() for p in plugins) else 1)" \
-                "$installed" "$pname" 2>/dev/null; then
+plugins=json.load(sys.stdin)
+exit(0 if any(p.get('Name','').lower()==sys.argv[1].lower() for p in plugins) else 1)" \
+                "$pname" 2>/dev/null; then
             skip "Plugin '${pname}' already installed"
             return 0
         fi
-        # Look up package in the combined catalog
-        pkgs=$(curl -sf "$JF_BASE/Packages" -H "$JF_AUTH" 2>/dev/null || echo "[]")
         pkg_info=$(python3 -c "
 import json,sys
-pkgs=json.loads(sys.argv[1])
+pkgs=json.load(open(sys.argv[1]))
 name=sys.argv[2].lower()
 match=next((p for p in pkgs if p.get('name','').lower()==name),None)
 if match and match.get('versions'):
     v=match['versions'][0]
     print(match.get('guid','')+'|'+v.get('version','')+'|'+v.get('repositoryUrl',''))
 else:
-    print('')" "$pkgs" "$pname" 2>/dev/null || echo "")
+    print('')" "$_jf_pkgs_file" "$pname" 2>/dev/null || echo "")
 
         if [[ -z "$pkg_info" ]]; then
             fail "Plugin '${pname}' not found in catalog — skipping"
