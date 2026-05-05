@@ -1535,6 +1535,27 @@ section "Uptime Kuma"
 
 wait_http "http://localhost:3001" "Uptime Kuma" 60 || { fail "Uptime Kuma not responding — skipping"; }
 
+# Step 1: Complete the database setup wizard if not done yet.
+# On first run, db-config.json is missing and Uptime Kuma waits at /setup-database.
+# The HTTP server still responds (302) during this phase, so wait_http alone is not enough.
+_uk_setup_info=$(curl -sf --max-time 5 "http://localhost:3001/setup-database-info" 2>/dev/null || echo '{}')
+_uk_need_setup=$(echo "$_uk_setup_info" | python3 -c "import json,sys; print(json.load(sys.stdin).get('needSetup', False))" 2>/dev/null)
+if [[ "$_uk_need_setup" == "True" ]]; then
+    info "Uptime Kuma database not initialised — running setup..."
+    _uk_setup_resp=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+        -X POST "http://localhost:3001/setup-database" \
+        -H "Content-Type: application/json" \
+        -d '{"dbConfig":{"type":"sqlite"}}' 2>/dev/null)
+    if [[ "$_uk_setup_resp" =~ ^2 ]]; then
+        ok "Database setup complete — waiting for restart..."
+        sleep 8
+        wait_http "http://localhost:3001" "Uptime Kuma post-setup" 60 \
+            || { fail "Uptime Kuma did not come back after setup"; }
+    else
+        fail "Database setup POST returned HTTP $_uk_setup_resp"
+    fi
+fi
+
 if [[ -z "${ADMIN_PASSWORD:-}" || "${ADMIN_PASSWORD:-}" == "changeme" ]]; then
     skip "Uptime Kuma setup skipped — set ADMIN_PASSWORD in .env first"
 else
@@ -1611,7 +1632,41 @@ db.serialize(async () => {
                     const skipped = monitors.length - added;
                     if (added > 0) ok(added + ' monitor(s) added');
                     if (skipped === monitors.length) skip('All monitors already exist');
-                    db.close();
+
+                    // Create the "mediaserver" status page if it doesn't exist
+                    db.get('SELECT id FROM status_page WHERE slug = ?', ['mediaserver'], (spErr, spRow) => {
+                        if (spRow) {
+                            skip('Status page "mediaserver" already exists');
+                            db.close();
+                            return;
+                        }
+                        db.run(
+                            'INSERT INTO status_page (slug, title, description, icon, theme, published, search_engine_index, show_tags, password, footer_text, custom_css, show_powered_by, analytics_id, created_date, modified_date, show_certificate_expiry, auto_refresh_interval, show_only_last_heartbeat) VALUES (?,?,?,?,?,1,1,0,NULL,\'\',\'\',1,NULL,datetime(\'now\'),datetime(\'now\'),0,0,0)',
+                            ['mediaserver', 'Media Server', 'Service status for the media stack', '', 'light'],
+                            function(spInsertErr) {
+                                if (spInsertErr) { fail('Failed to create status page: ' + spInsertErr.message); db.close(); return; }
+                                const pageId = this.lastID;
+                                db.run(
+                                    'INSERT INTO [group] (name, created_date, public, active, weight, status_page_id) VALUES (\'Services\', datetime(\'now\'), 1, 1, 0, ?)',
+                                    [pageId],
+                                    function(grpErr) {
+                                        if (grpErr) { fail('Failed to create status page group: ' + grpErr.message); db.close(); return; }
+                                        const groupId = this.lastID;
+                                        db.all('SELECT id FROM monitor ORDER BY id', (mErr, allMonitors) => {
+                                            let mp = allMonitors.length;
+                                            allMonitors.forEach((m, idx) => {
+                                                db.run(
+                                                    'INSERT INTO monitor_group (monitor_id, group_id, weight, send_url) VALUES (?,?,?,0)',
+                                                    [m.id, groupId, idx],
+                                                    () => { if (--mp === 0) { ok('Status page "mediaserver" created with ' + allMonitors.length + ' monitors'); db.close(); } }
+                                                );
+                                            });
+                                        });
+                                    }
+                                );
+                            }
+                        );
+                    });
                 }
             });
         });
