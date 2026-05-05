@@ -354,19 +354,6 @@ else
     skip "No NVIDIA GPU detected — skipping nvidia-container-toolkit"
 fi
 
-# pip3 + uptime-kuma-api (for Uptime Kuma automation)
-if python3 -c "import uptime_kuma_api" &>/dev/null; then
-    skip "uptime-kuma-api already installed"
-else
-    info "Installing uptime-kuma-api..."
-    if ! command -v pip3 &>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip python3-setuptools >/dev/null 2>&1
-    fi
-    pip3 install --break-system-packages -q setuptools uptime-kuma-api 2>/dev/null \
-        && ok "uptime-kuma-api installed" \
-        || { skip "uptime-kuma-api install failed — Uptime Kuma will need manual setup"; }
-fi
-
 # ============================================================
 # STEP 1 — System: directories + Docker on boot
 # ============================================================

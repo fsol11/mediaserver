@@ -213,7 +213,29 @@ RADARR_KEY="$RADARR_API_KEY"
 # 3a. qBittorrent download client
 resp=$(arr_get "$RADARR_BASE/api/v3/downloadclient" "$RADARR_KEY")
 if arr_exists "$resp" "implementation" "QBittorrent"; then
-    skip "qBittorrent download client already configured"
+    # Client exists — always sync credentials so they stay consistent with .env
+    _dc_id=$(body "$resp" | python3 -c "
+import json,sys
+items=json.load(sys.stdin)
+m=next((i for i in items if i.get('implementation','').lower()=='qbittorrent'),None)
+print(m['id'] if m else '')" 2>/dev/null || echo "")
+    if [[ -n "$_dc_id" ]]; then
+        _dc_body=$(curl -sf "$RADARR_BASE/api/v3/downloadclient/$_dc_id" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null)
+        _dc_updated=$(echo "$_dc_body" | python3 -c "
+import json,sys
+c=json.load(sys.stdin); u,pw=sys.argv[1],sys.argv[2]
+for f in c['fields']:
+    if f['name']=='username': f['value']=u
+    if f['name']=='password': f['value']=pw
+print(json.dumps(c))" "${ADMIN_USER:-admin}" "${ADMIN_PASSWORD:-adminadmin}" 2>/dev/null)
+        _dc_resp=$(echo "$_dc_updated" | curl -s -o /dev/null -w "%{http_code}" -X PUT \
+            "$RADARR_BASE/api/v3/downloadclient/$_dc_id" \
+            -H "X-Api-Key: $RADARR_KEY" -H "Content-Type: application/json" -d @-)
+        [[ "$_dc_resp" =~ ^2 ]] && ok "qBittorrent credentials synced in Radarr" \
+            || fail "Failed to sync qBittorrent credentials in Radarr (HTTP $_dc_resp)"
+    else
+        skip "qBittorrent already configured in Radarr (could not get ID)"
+    fi
 else
     payload=$(cat <<JSON
 {
@@ -383,7 +405,29 @@ SONARR_KEY="$SONARR_API_KEY"
 # 4a. qBittorrent download client
 resp=$(arr_get "$SONARR_BASE/api/v3/downloadclient" "$SONARR_KEY")
 if arr_exists "$resp" "implementation" "QBittorrent"; then
-    skip "qBittorrent download client already configured"
+    # Client exists — always sync credentials so they stay consistent with .env
+    _dc_id=$(body "$resp" | python3 -c "
+import json,sys
+items=json.load(sys.stdin)
+m=next((i for i in items if i.get('implementation','').lower()=='qbittorrent'),None)
+print(m['id'] if m else '')" 2>/dev/null || echo "")
+    if [[ -n "$_dc_id" ]]; then
+        _dc_body=$(curl -sf "$SONARR_BASE/api/v3/downloadclient/$_dc_id" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null)
+        _dc_updated=$(echo "$_dc_body" | python3 -c "
+import json,sys
+c=json.load(sys.stdin); u,pw=sys.argv[1],sys.argv[2]
+for f in c['fields']:
+    if f['name']=='username': f['value']=u
+    if f['name']=='password': f['value']=pw
+print(json.dumps(c))" "${ADMIN_USER:-admin}" "${ADMIN_PASSWORD:-adminadmin}" 2>/dev/null)
+        _dc_resp=$(echo "$_dc_updated" | curl -s -o /dev/null -w "%{http_code}" -X PUT \
+            "$SONARR_BASE/api/v3/downloadclient/$_dc_id" \
+            -H "X-Api-Key: $SONARR_KEY" -H "Content-Type: application/json" -d @-)
+        [[ "$_dc_resp" =~ ^2 ]] && ok "qBittorrent credentials synced in Sonarr" \
+            || fail "Failed to sync qBittorrent credentials in Sonarr (HTTP $_dc_resp)"
+    else
+        skip "qBittorrent already configured in Sonarr (could not get ID)"
+    fi
 else
     payload=$(cat <<JSON
 {
