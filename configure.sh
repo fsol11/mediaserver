@@ -775,76 +775,59 @@ BAZARR_BASE="http://localhost:6767"
 BAZARR_KEY="$BAZARR_API_KEY"
 
 # Get current Bazarr settings to check existing config
+# Bazarr settings API uses form-encoded POST (not JSON).
+# Field names follow the pattern: settings-{section}-{key}
+# "enabled" is not a field; connection is active when use_radarr/use_sonarr=true and apikey is set.
 current=$(http GET "$BAZARR_BASE/api/system/settings" -H "X-API-KEY: $BAZARR_KEY")
 
-radarr_enabled=$(body "$current" | python3 -c "
+radarr_configured=$(body "$current" | python3 -c "
 import json,sys
 try:
     d=json.load(sys.stdin)
-    print(d.get('radarr',{}).get('enabled', False))
-except: print(False)
+    use=d.get('general',{}).get('use_radarr', False)
+    key=d.get('radarr',{}).get('apikey','')
+    print('true' if use and key else 'false')
+except: print('false')
 " 2>/dev/null)
 
-sonarr_enabled=$(body "$current" | python3 -c "
+sonarr_configured=$(body "$current" | python3 -c "
 import json,sys
 try:
     d=json.load(sys.stdin)
-    print(d.get('sonarr',{}).get('enabled', False))
-except: print(False)
+    use=d.get('general',{}).get('use_sonarr', False)
+    key=d.get('sonarr',{}).get('apikey','')
+    print('true' if use and key else 'false')
+except: print('false')
 " 2>/dev/null)
 
-if [[ "$radarr_enabled" == "True" ]]; then
+if [[ "$radarr_configured" == "true" ]]; then
     skip "Radarr already connected in Bazarr"
 else
-    payload=$(cat <<JSON
-{
-  "radarr": {
-    "enabled": true,
-    "host": "radarr",
-    "port": 7878,
-    "apikey": "${RADARR_API_KEY}",
-    "ssl": false,
-    "base_url": "/",
-    "movies_sync": 60,
-    "only_monitored": false,
-    "sync_only_monitored_movies": false
-  }
-}
-JSON
-)
-    resp=$(http POST "$BAZARR_BASE/api/system/settings" \
+    resp=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 -X POST "$BAZARR_BASE/api/system/settings" \
         -H "X-API-KEY: $BAZARR_KEY" \
-        -H "Content-Type: application/json" \
-        -d "$payload")
-    ok_code "$resp" && ok "Radarr connected in Bazarr" \
-        || fail "Failed to connect Radarr (HTTP $(code "$resp")): $(body "$resp")"
+        --data-urlencode "settings-general-use_radarr=true" \
+        --data-urlencode "settings-radarr-ip=radarr" \
+        --data-urlencode "settings-radarr-port=7878" \
+        --data-urlencode "settings-radarr-apikey=${RADARR_API_KEY}" \
+        --data-urlencode "settings-radarr-ssl=false" \
+        --data-urlencode "settings-radarr-base_url=/")
+    [[ "$resp" =~ ^2 ]] && ok "Radarr connected in Bazarr" \
+        || fail "Failed to connect Radarr in Bazarr (HTTP $resp)"
 fi
 
-if [[ "$sonarr_enabled" == "True" ]]; then
+if [[ "$sonarr_configured" == "true" ]]; then
     skip "Sonarr already connected in Bazarr"
 else
-    payload=$(cat <<JSON
-{
-  "sonarr": {
-    "enabled": true,
-    "host": "sonarr",
-    "port": 8989,
-    "apikey": "${SONARR_API_KEY}",
-    "ssl": false,
-    "base_url": "/",
-    "series_sync": 60,
-    "only_monitored": false,
-    "sync_only_monitored_series": false
-  }
-}
-JSON
-)
-    resp=$(http POST "$BAZARR_BASE/api/system/settings" \
+    resp=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 -X POST "$BAZARR_BASE/api/system/settings" \
         -H "X-API-KEY: $BAZARR_KEY" \
-        -H "Content-Type: application/json" \
-        -d "$payload")
-    ok_code "$resp" && ok "Sonarr connected in Bazarr" \
-        || fail "Failed to connect Sonarr (HTTP $(code "$resp")): $(body "$resp")"
+        --data-urlencode "settings-general-use_sonarr=true" \
+        --data-urlencode "settings-sonarr-ip=sonarr" \
+        --data-urlencode "settings-sonarr-port=8989" \
+        --data-urlencode "settings-sonarr-apikey=${SONARR_API_KEY}" \
+        --data-urlencode "settings-sonarr-ssl=false" \
+        --data-urlencode "settings-sonarr-base_url=/")
+    [[ "$resp" =~ ^2 ]] && ok "Sonarr connected in Bazarr" \
+        || fail "Failed to connect Sonarr in Bazarr (HTTP $resp)"
 fi
 
 # 6c. Authentication — must be set directly in config.yaml (API ignores auth writes)
