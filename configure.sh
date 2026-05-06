@@ -35,6 +35,15 @@ TZ=$(timedatectl show --property=Timezone --value 2>/dev/null) \
 if [[ ! -f "$ENV_FILE" ]]; then echo "ERROR: $ENV_FILE not found"; exit 1; fi
 set -o allexport; source "$ENV_FILE"; set +o allexport
 
+# ── Normalize CF_DOMAIN to lowercase (DNS is case-insensitive) ────────────────
+# Prevents Homepage host-validation failures when the domain is entered with
+# mixed case (e.g. "Farshid.ca" → host header arrives as "farshid.ca").
+if [[ -n "${CF_DOMAIN:-}" && "${CF_DOMAIN}" != "${CF_DOMAIN,,}" ]]; then
+    set_env "CF_DOMAIN" "${CF_DOMAIN,,}"
+    CF_DOMAIN="${CF_DOMAIN,,}"
+    ok "CF_DOMAIN normalized to lowercase in .env: $CF_DOMAIN"
+fi
+
 # ── Map PREFERRED_QUALITY → Radarr/Sonarr profile name ────
 case "${PREFERRED_QUALITY:-1080p}" in
     720p)       QP_PROFILE_NAME="HD-720p"  ;;
@@ -967,8 +976,19 @@ except: print('${QP_PROFILE_NAME}')
 
         # Check existing Radarr servers
         existing_radarr=$(http GET "$JS_BASE/api/v1/settings/radarr" -H "X-Api-Key: $JS_KEY")
-        if echo "$(body "$existing_radarr")" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d else 1)" 2>/dev/null; then
-            skip "Radarr already configured in Jellyseerr"
+        _radarr_existing_id=$(body "$existing_radarr" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['id'] if d else '')" 2>/dev/null)
+        if [[ -n "$_radarr_existing_id" ]]; then
+            # Already exists — ensure syncEnabled is true
+            _radarr_sync=$(body "$existing_radarr" | python3 -c "import json,sys; d=json.load(sys.stdin); print(str(d[0].get('syncEnabled',False)).lower() if d else 'false')" 2>/dev/null)
+            if [[ "$_radarr_sync" == "true" ]]; then
+                skip "Radarr already configured in Jellyseerr (sync enabled)"
+            else
+                _radarr_patch=$(body "$existing_radarr" | python3 -c "import json,sys; d=json.load(sys.stdin); d[0]['syncEnabled']=True; print(json.dumps(d[0]))" 2>/dev/null)
+                _resp=$(echo "$_radarr_patch" | curl -s -o /dev/null -w "%{http_code}" -X PUT "$JS_BASE/api/v1/settings/radarr/$_radarr_existing_id" \
+                    -H "X-Api-Key: $JS_KEY" -H "Content-Type: application/json" -d @-)
+                [[ "$_resp" =~ ^2 ]] && ok "Radarr sync enabled in Jellyseerr" \
+                    || fail "Failed to enable Radarr sync (HTTP $_resp)"
+            fi
         else
             payload=$(cat <<JSON
 {
@@ -986,7 +1006,7 @@ except: print('${QP_PROFILE_NAME}')
   "isDefault": true,
   "enableSeasonFolders": false,
   "externalUrl": "",
-  "syncEnabled": false,
+  "syncEnabled": true,
   "preventSearch": false
 }
 JSON
@@ -1001,8 +1021,19 @@ JSON
 
         # Check existing Sonarr servers
         existing_sonarr=$(http GET "$JS_BASE/api/v1/settings/sonarr" -H "X-Api-Key: $JS_KEY")
-        if echo "$(body "$existing_sonarr")" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d else 1)" 2>/dev/null; then
-            skip "Sonarr already configured in Jellyseerr"
+        _sonarr_existing_id=$(body "$existing_sonarr" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['id'] if d else '')" 2>/dev/null)
+        if [[ -n "$_sonarr_existing_id" ]]; then
+            # Already exists — ensure syncEnabled is true
+            _sonarr_sync=$(body "$existing_sonarr" | python3 -c "import json,sys; d=json.load(sys.stdin); print(str(d[0].get('syncEnabled',False)).lower() if d else 'false')" 2>/dev/null)
+            if [[ "$_sonarr_sync" == "true" ]]; then
+                skip "Sonarr already configured in Jellyseerr (sync enabled)"
+            else
+                _sonarr_patch=$(body "$existing_sonarr" | python3 -c "import json,sys; d=json.load(sys.stdin); d[0]['syncEnabled']=True; print(json.dumps(d[0]))" 2>/dev/null)
+                _resp=$(echo "$_sonarr_patch" | curl -s -o /dev/null -w "%{http_code}" -X PUT "$JS_BASE/api/v1/settings/sonarr/$_sonarr_existing_id" \
+                    -H "X-Api-Key: $JS_KEY" -H "Content-Type: application/json" -d @-)
+                [[ "$_resp" =~ ^2 ]] && ok "Sonarr sync enabled in Jellyseerr" \
+                    || fail "Failed to enable Sonarr sync (HTTP $_resp)"
+            fi
         else
             payload=$(cat <<JSON
 {
@@ -1019,7 +1050,7 @@ JSON
   "isDefault": true,
   "enableSeasonFolders": true,
   "externalUrl": "",
-  "syncEnabled": false,
+  "syncEnabled": true,
   "preventSearch": false
 }
 JSON
@@ -1074,6 +1105,68 @@ except: print('')
                     fail "Failed to enable Jellyfin libraries (HTTP $(code "$enable_resp"))"
                 fi
             fi
+        fi
+
+        # ── Auto-approve permissions ──────────────────────────────────
+        # Jellyseerr permission bits: REQUEST=16, AUTO_APPROVE=64, AUTO_APPROVE_TV=2048
+        # Without AUTO_APPROVE, requests sit in PENDING and never reach Radarr/Sonarr.
+        _auto_approve_bits=$(( 16 | 64 | 2048 ))   # = 2128
+
+        # 1. Update default permissions for new users
+        _main_settings=$(http GET "$JS_BASE/api/v1/settings/main" -H "X-Api-Key: $JS_KEY")
+        _cur_default=$(body "$_main_settings" | python3 -c "import json,sys; print(json.load(sys.stdin).get('defaultPermissions',0))" 2>/dev/null)
+        if (( (_cur_default & _auto_approve_bits) == _auto_approve_bits )); then
+            skip "Jellyseerr default permissions already include auto-approve"
+        else
+            _new_default=$(( _cur_default | _auto_approve_bits ))
+            _resp=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$JS_BASE/api/v1/settings/main" \
+                -H "X-Api-Key: $JS_KEY" -H "Content-Type: application/json" \
+                -d "{\"defaultPermissions\":$_new_default}")
+            [[ "$_resp" =~ ^2 ]] && ok "Jellyseerr default permissions set to include auto-approve" \
+                || fail "Failed to update default permissions (HTTP $_resp)"
+        fi
+
+        # 2. Grant auto-approve to all existing non-admin users
+        _users=$(http GET "$JS_BASE/api/v1/user?take=100&skip=0" -H "X-Api-Key: $JS_KEY")
+        body "$_users" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+bits=$_auto_approve_bits
+for u in d.get('results',[]):
+    p=u.get('permissions',0)
+    if p & 2:  # ADMIN bit — skip
+        continue
+    if (p & bits) != bits:
+        print(u['id'])
+" 2>/dev/null | while read -r _uid; do
+            _udata=$(http GET "$JS_BASE/api/v1/user/$_uid" -H "X-Api-Key: $JS_KEY")
+            _upatched=$(body "$_udata" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+d['permissions']=d.get('permissions',0)|$_auto_approve_bits
+print(json.dumps(d))" 2>/dev/null)
+            _uresp=$(echo "$_upatched" | curl -s -o /dev/null -w "%{http_code}" -X PUT "$JS_BASE/api/v1/user/$_uid" \
+                -H "X-Api-Key: $JS_KEY" -H "Content-Type: application/json" -d @-)
+            [[ "$_uresp" =~ ^2 ]] && ok "Auto-approve granted to user id $_uid" \
+                || fail "Failed to update user $_uid (HTTP $_uresp)"
+        done
+
+        # 3. Approve any requests still in PENDING state
+        _pending=$(http GET "$JS_BASE/api/v1/request?take=100&skip=0&filter=pending" -H "X-Api-Key: $JS_KEY")
+        _pending_ids=$(body "$_pending" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+ids=[str(r['id']) for r in d.get('results',[]) if r.get('status')==1]
+print(' '.join(ids))" 2>/dev/null)
+        if [[ -z "$_pending_ids" ]]; then
+            skip "No pending requests to approve"
+        else
+            for _rid in $_pending_ids; do
+                _rresp=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$JS_BASE/api/v1/request/$_rid/approve" \
+                    -H "X-Api-Key: $JS_KEY" -H "Content-Type: application/json")
+                [[ "$_rresp" =~ ^2 ]] && ok "Approved request $_rid" \
+                    || fail "Failed to approve request $_rid (HTTP $_rresp)"
+            done
         fi
     fi
 fi

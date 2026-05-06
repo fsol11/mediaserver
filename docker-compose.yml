@@ -267,7 +267,7 @@ services:
       - TZ=${TZ}
       - PUID=${PUID}
       - PGID=${PGID}
-      - HOMEPAGE_ALLOWED_HOSTS=homepage.${CF_DOMAIN:-localhost}
+      - HOMEPAGE_ALLOWED_HOSTS=homepage.${CF_DOMAIN:-localhost},localhost,localhost:3000
       # Expose API keys to Homepage for widgets
       - HOMEPAGE_VAR_SONARR_KEY=${SONARR_API_KEY}
       - HOMEPAGE_VAR_RADARR_KEY=${RADARR_API_KEY}
