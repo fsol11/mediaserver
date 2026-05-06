@@ -292,16 +292,15 @@ else
     else fail "Failed to add root folder (HTTP $(code "$resp")): $(body "$resp")"; fi
 fi
 
-# 3c. Authentication
+# 3c. Authentication — always sync credentials so .env changes take effect
 if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
     host_resp=$(arr_get "$RADARR_BASE/api/v3/config/host" "$RADARR_KEY")
     host_body=$(body "$host_resp")
-    auth_method=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('authenticationMethod','none'))" 2>/dev/null || echo "none")
-    if [[ "$auth_method" == "forms" ]]; then
-        skip "Authentication already enabled (Forms)"
-    else
-        host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
-        auth_payload=$(python3 -c "
+    host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
+    _cur_user=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('username',''))" 2>/dev/null)
+    _cur_method=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('authenticationMethod','none'))" 2>/dev/null)
+    # Always PUT to keep credentials in sync; passwordConfirmation triggers a hash update
+    auth_payload=$(python3 -c "
 import json,sys
 d=json.loads(sys.argv[1])
 d['authenticationMethod']='forms'
@@ -310,10 +309,9 @@ d['username']=sys.argv[2]
 d['password']=sys.argv[3]
 d['passwordConfirmation']=sys.argv[3]
 print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
-        resp=$(arr_put "$RADARR_BASE/api/v3/config/host/$host_id" "$RADARR_KEY" "$auth_payload")
-        ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
-            || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
-    fi
+    resp=$(arr_put "$RADARR_BASE/api/v3/config/host/$host_id" "$RADARR_KEY" "$auth_payload")
+    ok_code "$resp" && ok "Authentication synced (${ADMIN_USER})" \
+        || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
 fi
 
 # 3d. Quality profile — apply only when PREFERRED_QUALITY is set and all movies are still
@@ -484,16 +482,12 @@ else
     else fail "Failed to add root folder (HTTP $(code "$resp")): $(body "$resp")"; fi
 fi
 
-# 4c. Authentication
+# 4c. Authentication — always sync credentials so .env changes take effect
 if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
     host_resp=$(arr_get "$SONARR_BASE/api/v3/config/host" "$SONARR_KEY")
     host_body=$(body "$host_resp")
-    auth_method=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('authenticationMethod','none'))" 2>/dev/null || echo "none")
-    if [[ "$auth_method" == "forms" ]]; then
-        skip "Authentication already enabled (Forms)"
-    else
-        host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
-        auth_payload=$(python3 -c "
+    host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
+    auth_payload=$(python3 -c "
 import json,sys
 d=json.loads(sys.argv[1])
 d['authenticationMethod']='forms'
@@ -502,10 +496,9 @@ d['username']=sys.argv[2]
 d['password']=sys.argv[3]
 d['passwordConfirmation']=sys.argv[3]
 print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
-        resp=$(arr_put "$SONARR_BASE/api/v3/config/host/$host_id" "$SONARR_KEY" "$auth_payload")
-        ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
-            || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
-    fi
+    resp=$(arr_put "$SONARR_BASE/api/v3/config/host/$host_id" "$SONARR_KEY" "$auth_payload")
+    ok_code "$resp" && ok "Authentication synced (${ADMIN_USER})" \
+        || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
 fi
 
 # 4d. Quality profile — apply only when PREFERRED_QUALITY is set and all series are still
@@ -660,16 +653,12 @@ JSON
     else fail "Failed to add FlareSolverr proxy (HTTP $(code "$resp2")): $(body "$resp2")"; fi
 fi
 
-# 5d. Authentication
+# 5d. Authentication — always sync credentials so .env changes take effect
 if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
     host_resp=$(arr_get "$PROWLARR_BASE/api/v1/config/host" "$PROWLARR_KEY")
     host_body=$(body "$host_resp")
-    prowl_user=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('username',''))" 2>/dev/null || echo "")
-    if [[ -n "$prowl_user" ]]; then
-        skip "Authentication already configured (${prowl_user})"
-    else
-        host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
-        auth_payload=$(python3 -c "
+    host_id=$(echo "$host_body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',1))" 2>/dev/null || echo "1")
+    auth_payload=$(python3 -c "
 import json,sys
 d=json.loads(sys.argv[1])
 d['authenticationMethod']='forms'
@@ -678,10 +667,9 @@ d['username']=sys.argv[2]
 d['password']=sys.argv[3]
 d['passwordConfirmation']=sys.argv[3]
 print(json.dumps(d))" "$host_body" "${ADMIN_USER}" "${ADMIN_PASSWORD}")
-        resp=$(arr_put "$PROWLARR_BASE/api/v1/config/host/$host_id" "$PROWLARR_KEY" "$auth_payload")
-        ok_code "$resp" && ok "Authentication enabled (${ADMIN_USER})" \
-            || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
-    fi
+    resp=$(arr_put "$PROWLARR_BASE/api/v1/config/host/$host_id" "$PROWLARR_KEY" "$auth_payload")
+    ok_code "$resp" && ok "Authentication synced (${ADMIN_USER})" \
+        || fail "Failed to set authentication (HTTP $(code "$resp")): $(body "$resp")"
 fi
 
 # 5e. Add public indexers from PROWLARR_INDEXERS list
