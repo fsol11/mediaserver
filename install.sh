@@ -243,7 +243,8 @@ if ! grep -q "^WIREGUARD_PRIVATE_KEY=" "$ENV_FILE" 2>/dev/null; then
         echo "# Key: sudo wg show nordlynx private-key   (on a machine with the NordVPN app)"
         echo "# or https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/nordvpn.md"
         echo "WIREGUARD_PRIVATE_KEY="
-        echo "VPN_COUNTRY=\"France\""
+        echo "# Optional country filter — empty = random NordVPN server"
+        echo "VPN_COUNTRY="
     } >> "$ENV_FILE"
 fi
 _wg_key=$(env_val "WIREGUARD_PRIVATE_KEY"); _wg_key="${_wg_key//\"/}"

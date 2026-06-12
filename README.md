@@ -46,7 +46,7 @@ cp .env.initial .env
 Open `.env` and set:
 
 -   **`ADMIN_USER` / `ADMIN_PASSWORD`** — admin credentials for all services (Jellyfin, qBittorrent, Uptime Kuma, Audiobookshelf)
--   **`WIREGUARD_PRIVATE_KEY`** — NordVPN WireGuard key, **required**: all qBittorrent traffic is routed through the Gluetun VPN container and torrenting is blocked if the VPN is down (kill switch). Get the key with `sudo wg show nordlynx private-key` on a machine running the NordVPN app, or follow the [gluetun NordVPN guide](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/nordvpn.md). `VPN_COUNTRY` picks the server location (default: France).
+-   **`WIREGUARD_PRIVATE_KEY`** — NordVPN WireGuard key, **required**: all qBittorrent traffic is routed through the Gluetun VPN container and torrenting is blocked if the VPN is down (kill switch). Get the key with `sudo wg show nordlynx private-key` on a machine running the NordVPN app, or follow the [gluetun NordVPN guide](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/nordvpn.md). `VPN_COUNTRY` optionally pins the server location (e.g. `France`); leave it empty to connect to a random NordVPN server.
 -   **`DATA_ROOT`** — root path to your media storage drive
 
 These folders are already set, if you don't want to custome, just let them be:

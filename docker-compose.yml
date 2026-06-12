@@ -35,7 +35,9 @@ services:
       - VPN_SERVICE_PROVIDER=nordvpn
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
-      - SERVER_COUNTRIES=${VPN_COUNTRY:-France}
+      # Empty = no country filter: gluetun picks a random server
+      # from NordVPN's full pool on every (re)start.
+      - SERVER_COUNTRIES=${VPN_COUNTRY:-}
       # Allow LAN access to the qBittorrent WebUI + torrent port
       - FIREWALL_INPUT_PORTS=8080,6881
     ports:
