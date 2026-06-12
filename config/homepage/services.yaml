@@ -45,6 +45,14 @@
           username: "{{HOMEPAGE_VAR_QBIT_USERNAME}}"
           password: "{{HOMEPAGE_VAR_QBIT_PASSWORD}}"
 
+    - Gluetun:
+        description: VPN Gateway (NordVPN)
+        icon: gluetun.png
+        widget:
+          type: gluetun
+          url: http://gluetun:8000
+          key: "{{HOMEPAGE_VAR_GLUETUN_KEY}}"
+
     - Prowlarr:
         href: https://prowlarr.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Indexer Manager
