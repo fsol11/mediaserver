@@ -890,6 +890,53 @@ section "Service Configuration"
 bash "$STACK_DIR/configure.sh"
 
 # ============================================================
+# STEP 6b — Live TV: curated IPTV playlist + daily refresh
+# Probes free IPTV streams and keeps only working channels;
+# also disables playback remuxing (broken for live HLS sources,
+# ffmpeg cannot mux the ".hls" DirectStream output).
+# ============================================================
+section "Live TV"
+
+if ! crontab -l 2>/dev/null | grep -q 'refresh-livetv.sh'; then
+    (crontab -l 2>/dev/null; echo "30 4 * * * bash $STACK_DIR/scripts/refresh-livetv.sh >> $STACK_DIR/config/jellyfin/livetv-refresh.log 2>&1") | crontab - \
+        && ok "Daily Live TV playlist refresh scheduled (04:30)" \
+        || fail "Could not add Live TV refresh cron entry"
+else
+    skip "Live TV refresh cron already scheduled"
+fi
+
+if [[ -f "$STACK_DIR/config/jellyfin/livetv-canada.m3u" ]]; then
+    skip "Curated Live TV playlist already exists (refreshes daily via cron)"
+else
+    info "Building curated Live TV playlist (probes every stream — takes a few minutes)..."
+    bash "$STACK_DIR/scripts/refresh-livetv.sh" \
+        && ok "Live TV playlist built and tuner configured" \
+        || fail "Live TV playlist build failed — re-run: bash scripts/refresh-livetv.sh"
+fi
+
+# Disable playback remuxing for all users — the DirectStream path is
+# broken for live HLS tuners and makes every Live TV channel fail.
+if ! is_placeholder "JELLYFIN_API_KEY"; then
+    curl -s "http://localhost:8096/Users" -H "Authorization: MediaBrowser Token=\"${JELLYFIN_API_KEY}\"" \
+        | python3 -c "
+import json, sys, urllib.request
+key = '${JELLYFIN_API_KEY}'
+for u in json.load(sys.stdin):
+    pol = u['Policy']
+    if not pol.get('EnablePlaybackRemuxing', True):
+        continue
+    pol['EnablePlaybackRemuxing'] = False
+    req = urllib.request.Request(f\"http://localhost:8096/Users/{u['Id']}/Policy\",
+        data=json.dumps(pol).encode(), method='POST',
+        headers={'Authorization': f'MediaBrowser Token=\"{key}\"', 'Content-Type': 'application/json'})
+    urllib.request.urlopen(req, timeout=30)
+" && ok "Playback remuxing disabled for all users (Live TV fix)" \
+  || fail "Could not update user playback policies"
+else
+    skip "No Jellyfin API key — skipping playback policy update"
+fi
+
+# ============================================================
 # STEP 7 — Restart Homepage + Unpackerr with all API keys
 # ============================================================
 section "Applying Final Config"
