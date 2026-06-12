@@ -41,7 +41,7 @@
         icon: qbittorrent.png
         widget:
           type: qbittorrent
-          url: http://qbittorrent:8080
+          url: http://gluetun:8080
           username: "{{HOMEPAGE_VAR_QBIT_USERNAME}}"
           password: "{{HOMEPAGE_VAR_QBIT_PASSWORD}}"
 

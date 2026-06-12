@@ -17,8 +17,45 @@ networks:
 services:
 
   # ============================================================
+  # Gluetun - VPN Gateway (NordVPN / WireGuard)
+  # Only qBittorrent routes through it (network_mode below).
+  # Built-in firewall = kill switch: if the VPN drops, torrent
+  # traffic stops instead of leaking out the normal connection.
+  # Other containers reach qBittorrent at gluetun:8080.
+  # ============================================================
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TZ=${TZ}
+      - VPN_SERVICE_PROVIDER=nordvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - SERVER_COUNTRIES=${VPN_COUNTRY:-France}
+      # Allow LAN access to the qBittorrent WebUI + torrent port
+      - FIREWALL_INPUT_PORTS=8080,6881
+    ports:
+      # qBittorrent's ports live here because it shares this network
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    networks:
+      mediaserver:
+        # Old hostname still resolves here (qBittorrent's WebUI now
+        # lives in this container's network namespace) so existing
+        # references like the Cloudflare tunnel keep working.
+        aliases:
+          - qbittorrent
+    restart: unless-stopped
+
+  # ============================================================
   # qBittorrent - Torrent Download Client
   # WebUI: http://localhost:8080  (default: admin / adminadmin)
+  # All traffic goes through gluetun (NordVPN) — see above.
   # ============================================================
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -31,12 +68,10 @@ services:
     volumes:
       - ./config/qbittorrent:/config
       - "${DIR_DOWNLOADS}:/downloads"
-    ports:
-      - "8080:8080"
-      - "6881:6881"
-      - "6881:6881/udp"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     restart: unless-stopped
 
   # ============================================================

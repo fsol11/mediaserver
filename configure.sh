@@ -255,7 +255,7 @@ else
   "removeFailedDownloads": true,
   "name": "qBittorrent",
   "fields": [
-    {"name": "host",                 "value": "qbittorrent"},
+    {"name": "host",                 "value": "gluetun"},
     {"name": "port",                 "value": 8080},
     {"name": "useSsl",               "value": false},
     {"name": "urlBase",              "value": ""},
@@ -445,7 +445,7 @@ else
   "removeFailedDownloads": true,
   "name": "qBittorrent",
   "fields": [
-    {"name": "host",               "value": "qbittorrent"},
+    {"name": "host",               "value": "gluetun"},
     {"name": "port",               "value": 8080},
     {"name": "useSsl",             "value": false},
     {"name": "urlBase",            "value": ""},
@@ -1662,7 +1662,7 @@ const monitors = [
     { name: 'Radarr',         url: 'http://radarr:7878'      },
     { name: 'Sonarr',         url: 'http://sonarr:8989'      },
     { name: 'Prowlarr',       url: 'http://prowlarr:9696'    },
-    { name: 'qBittorrent',    url: 'http://qbittorrent:8080' },
+    { name: 'qBittorrent',    url: 'http://gluetun:8080' },
     { name: 'Bazarr',         url: 'http://bazarr:6767'      },
     { name: 'Homepage',       url: 'http://homepage:3000'    },
     { name: 'Audiobookshelf', url: 'http://audiobookshelf:13378' },
@@ -1861,7 +1861,7 @@ else
   {"hostname": "radarr.${CF_DOMAIN}",    "service": "http://radarr:7878"},
   {"hostname": "sonarr.${CF_DOMAIN}",    "service": "http://sonarr:8989"},
   {"hostname": "prowlarr.${CF_DOMAIN}",  "service": "http://prowlarr:9696"},
-  {"hostname": "qbit.${CF_DOMAIN}",      "service": "http://qbittorrent:8080"},
+  {"hostname": "qbit.${CF_DOMAIN}",      "service": "http://gluetun:8080"},
   {"hostname": "bazarr.${CF_DOMAIN}",    "service": "http://bazarr:6767"},
   {"service": "http_status:404"}
 ]
