@@ -88,7 +88,7 @@ Configure one entry per service you want exposed. Use the container names as the
 | `radarr` | yourdomain.com | `http://radarr:7878` | Protect with Access (Step 4) |
 | `sonarr` | yourdomain.com | `http://sonarr:8989` | Protect with Access (Step 4) |
 | `prowlarr` | yourdomain.com | `http://prowlarr:9696` | Protect with Access (Step 4) |
-| `qbit` | yourdomain.com | `http://qbittorrent:8080` | Protect with Access (Step 4) |
+| `qbit` | yourdomain.com | `http://gluetun:8080` | Protect with Access (Step 4) |
 | `bazarr` | yourdomain.com | `http://bazarr:6767` | Protect with Access (Step 4) |
 
 **Type** is always `HTTP` for all of these.
@@ -170,7 +170,7 @@ Internet → Cloudflare Edge (TLS) → Cloudflare Tunnel → cloudflared contain
                                                    │ radarr:7878          │
                                                    │ sonarr:8989          │
                                                    │ prowlarr:9696        │
-                                                   │ qbittorrent:8080     │
+                                                   │ gluetun:8080 (qbit)  │
                                                    │ bazarr:6767          │
                                                    └──────────────────────┘
 ```

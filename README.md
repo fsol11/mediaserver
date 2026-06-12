@@ -1,6 +1,6 @@
 # Media Server
 
-A fully automated, self-hosted media server stack that deploys 14 Docker containers and wires them all together with a single command. It handles downloading, organizing, streaming, and subtitling movies, TV shows, and audiobooks — no manual configuration needed.
+A fully automated, self-hosted media server stack that deploys 15 Docker containers and wires them all together with a single command. It handles downloading, organizing, streaming, and subtitling movies, TV shows, and audiobooks — no manual configuration needed.
 
 | Container        | Role                                            |
 |------------------|-------------------------------------------------|
@@ -11,7 +11,8 @@ A fully automated, self-hosted media server stack that deploys 14 Docker contain
 | **Bazarr**       | Subtitle management                             |
 | **Prowlarr**     | Indexer manager for Radarr & Sonarr              |
 | **FlareSolverr** | Bypass Cloudflare protection for indexers        |
-| **qBittorrent**  | Torrent download client                         |
+| **qBittorrent**  | Torrent download client (VPN-only, via Gluetun) |
+| **Gluetun**      | VPN gateway (NordVPN/WireGuard) with kill switch |
 | **Recyclarr**    | TRaSH quality profile sync                      |
 | **Unpackerr**    | Auto-extracts downloaded archives               |
 | **Homepage**     | Dashboard with service widgets                  |
@@ -45,6 +46,7 @@ cp .env.initial .env
 Open `.env` and set:
 
 -   **`ADMIN_USER` / `ADMIN_PASSWORD`** — admin credentials for all services (Jellyfin, qBittorrent, Uptime Kuma, Audiobookshelf)
+-   **`WIREGUARD_PRIVATE_KEY`** — NordVPN WireGuard key, **required**: all qBittorrent traffic is routed through the Gluetun VPN container and torrenting is blocked if the VPN is down (kill switch). Get the key with `sudo wg show nordlynx private-key` on a machine running the NordVPN app, or follow the [gluetun NordVPN guide](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/nordvpn.md). `VPN_COUNTRY` picks the server location (default: France).
 -   **`DATA_ROOT`** — root path to your media storage drive
 
 These folders are already set, if you don't want to custome, just let them be:

@@ -233,9 +233,31 @@ if grep -q "^ADMIN_USER=" "$ENV_FILE" 2>/dev/null; then
     done
 fi
 
+# VPN key is always required — gluetun can't connect without it, and
+# qBittorrent won't start until gluetun is healthy (kill switch).
+# Append placeholder lines to .env files created before the VPN was added.
+if ! grep -q "^WIREGUARD_PRIVATE_KEY=" "$ENV_FILE" 2>/dev/null; then
+    {
+        echo ""
+        echo "# NordVPN via gluetun — routes ONLY qBittorrent through the VPN"
+        echo "# Key: sudo wg show nordlynx private-key   (on a machine with the NordVPN app)"
+        echo "# or https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/nordvpn.md"
+        echo "WIREGUARD_PRIVATE_KEY="
+        echo "VPN_COUNTRY=\"France\""
+    } >> "$ENV_FILE"
+fi
+_wg_key=$(env_val "WIREGUARD_PRIVATE_KEY"); _wg_key="${_wg_key//\"/}"
+[[ -z "$_wg_key" ]] && MISSING+=("WIREGUARD_PRIVATE_KEY")
+
 if (( ${#MISSING[@]} > 0 )); then
     fail "The following values must be filled in before running:"
     for v in "${MISSING[@]}"; do fail "  $v"; done
+    for v in "${MISSING[@]}"; do
+        if [[ "$v" == "WIREGUARD_PRIVATE_KEY" ]]; then
+            info "Get your NordVPN WireGuard key: sudo wg show nordlynx private-key"
+            info "or see https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/nordvpn.md"
+        fi
+    done
     exit 1
 fi
 

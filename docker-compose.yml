@@ -97,7 +97,7 @@ services:
   # ============================================================
   # Radarr - Movie Collection Manager
   # WebUI: http://localhost:7878
-  # Download client: qbittorrent:8080
+  # Download client: gluetun:8080 (qBittorrent behind the VPN)
   # Indexers: managed via Prowlarr
   # ============================================================
   radarr:
@@ -120,7 +120,7 @@ services:
   # ============================================================
   # Sonarr - TV Series Collection Manager
   # WebUI: http://localhost:8989
-  # Download client: qbittorrent:8080
+  # Download client: gluetun:8080 (qBittorrent behind the VPN)
   # Indexers: managed via Prowlarr
   # ============================================================
   sonarr:
