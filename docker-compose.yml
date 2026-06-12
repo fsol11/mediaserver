@@ -18,10 +18,17 @@ services:
 
   # ============================================================
   # Gluetun - VPN Gateway (NordVPN / WireGuard)
-  # Only qBittorrent routes through it (network_mode below).
-  # Built-in firewall = kill switch: if the VPN drops, torrent
-  # traffic stops instead of leaking out the normal connection.
-  # Other containers reach qBittorrent at gluetun:8080.
+  # Every service except Jellyfin routes through it
+  # (network_mode: "service:gluetun" below).
+  # Built-in firewall = kill switch: if the VPN drops, traffic
+  # stops instead of leaking out the normal connection.
+  #
+  # All services share this network namespace, so:
+  #   - their published ports live on this container
+  #   - they reach each other via localhost or service hostnames
+  #     (the aliases below keep the old hostnames resolving)
+  #   - after restarting gluetun alone, run `docker compose up -d`
+  #     to re-attach the dependent containers
   # ============================================================
   gluetun:
     image: qmcgaw/gluetun:latest
@@ -38,23 +45,40 @@ services:
       # Empty = no country filter: gluetun picks a random server
       # from NordVPN's full pool on every (re)start.
       - SERVER_COUNTRIES=${VPN_COUNTRY:-}
-      # Allow LAN access to the qBittorrent WebUI + torrent port
-      - FIREWALL_INPUT_PORTS=8080,6881
+      # Allow LAN access to the WebUIs of all services behind the VPN
+      - FIREWALL_INPUT_PORTS=8080,6881,7878,8989,9696,6767,5055,3000,3001,80,8191
     volumes:
       # Control-server auth (API key) — used by the Homepage VPN widget
       - ./config/gluetun:/gluetun/auth:ro
     ports:
-      # qBittorrent's ports live here because it shares this network
-      - "8080:8080"
-      - "6881:6881"
-      - "6881:6881/udp"
+      - "8080:8080"        # qBittorrent
+      - "6881:6881"        # qBittorrent torrent
+      - "6881:6881/udp"    # qBittorrent torrent
+      - "7878:7878"        # Radarr
+      - "8989:8989"        # Sonarr
+      - "9696:9696"        # Prowlarr
+      - "6767:6767"        # Bazarr
+      - "5055:5055"        # Jellyseerr
+      - "3000:3000"        # Homepage
+      - "3001:3001"        # Uptime Kuma
+      - "13378:80"         # Audiobookshelf
+      - "8191:8191"        # FlareSolverr
     networks:
       mediaserver:
-        # Old hostname still resolves here (qBittorrent's WebUI now
-        # lives in this container's network namespace) so existing
-        # references like the Cloudflare tunnel keep working.
+        # Old hostnames still resolve here (the services now live in
+        # this container's network namespace) so existing references
+        # in service configs and the Cloudflare tunnel keep working.
         aliases:
           - qbittorrent
+          - radarr
+          - sonarr
+          - prowlarr
+          - bazarr
+          - jellyseerr
+          - homepage
+          - uptime-kuma
+          - audiobookshelf
+          - flaresolverr
     restart: unless-stopped
 
   # ============================================================
@@ -93,10 +117,10 @@ services:
       - TZ=${TZ}
     volumes:
       - ./config/prowlarr:/config
-    ports:
-      - "9696:9696"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     restart: unless-stopped
 
   # ============================================================
@@ -116,10 +140,10 @@ services:
       - /home/john/radarr-config:/config
       - "${DIR_MOVIES}:/movies"
       - "${DIR_DOWNLOADS}:/downloads"
-    ports:
-      - "7878:7878"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     restart: unless-stopped
 
   # ============================================================
@@ -139,10 +163,10 @@ services:
       - ./config/sonarr:/config
       - "${DIR_TV}:/tv"
       - "${DIR_DOWNLOADS}:/downloads"
-    ports:
-      - "8989:8989"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     restart: unless-stopped
 
   # ============================================================
@@ -197,15 +221,17 @@ services:
       - LOG_LEVEL=debug
     volumes:
       - ./config/jellyseerr:/app/config
-    ports:
-      - "5055:5055"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
     restart: unless-stopped
     depends_on:
-      - jellyfin
-      - radarr
-      - sonarr
+      gluetun:
+        condition: service_healthy
+      jellyfin:
+        condition: service_started
+      radarr:
+        condition: service_started
+      sonarr:
+        condition: service_started
 
   # ============================================================
   # Bazarr - Subtitle Manager
@@ -223,14 +249,15 @@ services:
       - ./config/bazarr:/config
       - "${DIR_MOVIES}:/movies"
       - "${DIR_TV}:/tv"
-    ports:
-      - "6767:6767"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
     restart: unless-stopped
     depends_on:
-      - radarr
-      - sonarr
+      gluetun:
+        condition: service_healthy
+      radarr:
+        condition: service_started
+      sonarr:
+        condition: service_started
 
   # ============================================================
   # Recyclarr - Radarr/Sonarr Quality Profile Sync
@@ -249,12 +276,15 @@ services:
       - RADARR_API_KEY=${RADARR_API_KEY}
     volumes:
       - ./config/recyclarr:/config
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
     restart: unless-stopped
     depends_on:
-      - radarr
-      - sonarr
+      gluetun:
+        condition: service_healthy
+      radarr:
+        condition: service_started
+      sonarr:
+        condition: service_started
 
   # ============================================================
   # Unpackerr - Extracts Completed Downloads
@@ -285,15 +315,19 @@ services:
       - UN_RADARR_0_DELETE_DELAY=5m
     volumes:
       - "${DIR_DOWNLOADS}:/downloads"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
     depends_on:
-      - radarr
-      - sonarr
-      - qbittorrent
+      gluetun:
+        condition: service_healthy
+      radarr:
+        condition: service_started
+      sonarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_started
 
   # ============================================================
   # Homepage - Dashboard
@@ -327,10 +361,10 @@ services:
       - ${DATA_ROOT}:${DATA_ROOT}:ro
     group_add:
       - "${DOCKER_GID}"  # docker group - gives read access to docker.sock
-    ports:
-      - "3000:3000"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     restart: unless-stopped
 
   # ============================================================
@@ -342,10 +376,10 @@ services:
     container_name: uptime-kuma
     volumes:
       - ./config/uptime-kuma:/app/data
-    ports:
-      - "3001:3001"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     restart: unless-stopped
 
   # ============================================================
@@ -362,10 +396,10 @@ services:
       - ./config/audiobookshelf:/config
       - ./config/audiobookshelf/metadata:/metadata
       - "${DIR_AUDIOBOOKS}:/audiobooks"
-    ports:
-      - "13378:80"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     restart: unless-stopped
 
   # ============================================================
@@ -381,10 +415,10 @@ services:
       - LOG_LEVEL=info
       - LOG_HTML=false
       - CAPTCHA_SOLVER=none
-    ports:
-      - "8191:8191"
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
     restart: unless-stopped
 
   # ============================================================
@@ -405,14 +439,20 @@ services:
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    networks:
-      - mediaserver
+    network_mode: "service:gluetun"
     restart: unless-stopped
     profiles:
       - cloudflare
     depends_on:
-      - jellyfin
-      - jellyseerr
-      - homepage
-      - audiobookshelf
-      - uptime-kuma
+      gluetun:
+        condition: service_healthy
+      jellyfin:
+        condition: service_started
+      jellyseerr:
+        condition: service_started
+      homepage:
+        condition: service_started
+      audiobookshelf:
+        condition: service_started
+      uptime-kuma:
+        condition: service_started

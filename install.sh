@@ -239,7 +239,7 @@ fi
 if ! grep -q "^WIREGUARD_PRIVATE_KEY=" "$ENV_FILE" 2>/dev/null; then
     {
         echo ""
-        echo "# NordVPN via gluetun — routes ONLY qBittorrent through the VPN"
+        echo "# NordVPN via gluetun — routes all services except Jellyfin through the VPN"
         echo "# Key: sudo wg show nordlynx private-key   (on a machine with the NordVPN app)"
         echo "# or https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/nordvpn.md"
         echo "WIREGUARD_PRIVATE_KEY="
