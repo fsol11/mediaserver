@@ -140,7 +140,7 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
     volumes:
-      - /home/john/radarr-config:/config
+      - ./config/radarr:/config
       - "${DIR_MOVIES}:/movies"
       - "${DIR_DOWNLOADS}:/downloads"
     network_mode: "service:gluetun"
@@ -418,6 +418,8 @@ services:
       - LOG_LEVEL=info
       - LOG_HTML=false
       - CAPTCHA_SOLVER=none
+    volumes:
+      - ./config/flaresolverr:/config
     network_mode: "service:gluetun"
     depends_on:
       gluetun:

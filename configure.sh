@@ -582,6 +582,184 @@ else
         || fail "Failed to add Sonarr release profile (HTTP $(code "$resp")): $(body "$resp")"
 fi
 
+# 4f. Jellyfin auto-refresh notification (MediaBrowser)
+section "Jellyfin Auto-Refresh"
+
+if is_placeholder "JELLYFIN_API_KEY"; then
+    skip "JELLYFIN_API_KEY not set — skipping Sonarr/Radarr -> Jellyfin auto-refresh hooks"
+else
+    wait_http "http://localhost:8096/health" "Jellyfin" 60 \
+        || fail "Jellyfin not responding — cannot configure auto-refresh hooks"
+
+    ensure_jellyfin_hook() {
+        local app_name="$1" base="$2" key="$3" kind="$4"
+        local list_resp list_body notif_id current_json payload resp
+
+        list_resp=$(arr_get "$base/api/v3/notification" "$key")
+        list_body=$(body "$list_resp")
+
+        notif_id=$(echo "$list_body" | python3 -c "
+import json,sys
+try:
+    items=json.load(sys.stdin)
+    m=next((i for i in items if str(i.get('implementation','')).lower()=='mediabrowser'), None)
+    print(m.get('id','') if m else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+
+        if [[ -n "$notif_id" ]]; then
+            current_json=$(curl -sf "$base/api/v3/notification/$notif_id" -H "X-Api-Key: $key" 2>/dev/null)
+            payload=$(echo "$current_json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+kind=sys.argv[1]
+
+d['name']='Jellyfin'
+d['implementation']='MediaBrowser'
+d['implementationName']='Emby / Jellyfin'
+d['configContract']='MediaBrowserSettings'
+d['tags']=d.get('tags', [])
+
+# Keep Jellyfin-compatible behavior.
+d['onGrab']=False
+d['onDownload']=True
+d['onUpgrade']=True
+d['onRename']=True
+d['onHealthIssue']=False
+d['includeHealthWarnings']=False
+d['onHealthRestored']=False
+d['onApplicationUpdate']=False
+d['onManualInteractionRequired']=False
+
+if kind=='sonarr':
+    d['onImportComplete']=True
+    d['onSeriesAdd']=False
+    d['onSeriesDelete']=False
+    d['onEpisodeFileDelete']=False
+    d['onEpisodeFileDeleteForUpgrade']=False
+elif kind=='radarr':
+    d['onMovieAdded']=False
+    d['onMovieDelete']=False
+    d['onMovieFileDelete']=False
+    d['onMovieFileDeleteForUpgrade']=False
+
+fields={f.get('name'):f for f in d.get('fields', []) if isinstance(f, dict) and f.get('name')}
+def set_field(name, value):
+    if name in fields:
+        fields[name]['value']=value
+    else:
+        fields[name]={'name':name,'value':value}
+
+set_field('host','jellyfin')
+set_field('port',8096)
+set_field('useSsl',False)
+set_field('urlBase','')
+set_field('apiKey',sys.argv[2])
+set_field('notify',False)
+set_field('updateLibrary',True)
+set_field('mapFrom','')
+set_field('mapTo','')
+
+d['fields']=list(fields.values())
+print(json.dumps(d))
+" "$kind" "$JELLYFIN_API_KEY" 2>/dev/null)
+
+            resp=$(arr_put "$base/api/v3/notification/$notif_id" "$key" "$payload")
+            if ok_code "$resp"; then
+                ok "$app_name -> Jellyfin auto-refresh hook synced"
+            else
+                fail "Failed to sync $app_name -> Jellyfin hook (HTTP $(code "$resp")): $(body "$resp")"
+            fi
+        else
+            if [[ "$kind" == "sonarr" ]]; then
+                payload=$(cat <<JSON
+{
+  "name": "Jellyfin",
+  "implementation": "MediaBrowser",
+  "implementationName": "Emby / Jellyfin",
+  "configContract": "MediaBrowserSettings",
+  "onGrab": false,
+  "onDownload": true,
+  "onUpgrade": true,
+  "onImportComplete": true,
+  "onRename": true,
+  "onSeriesAdd": false,
+  "onSeriesDelete": false,
+  "onEpisodeFileDelete": false,
+  "onEpisodeFileDeleteForUpgrade": false,
+  "onHealthIssue": false,
+  "includeHealthWarnings": false,
+  "onHealthRestored": false,
+  "onApplicationUpdate": false,
+  "onManualInteractionRequired": false,
+  "fields": [
+    {"name": "host", "value": "jellyfin"},
+    {"name": "port", "value": 8096},
+    {"name": "useSsl", "value": false},
+    {"name": "urlBase", "value": ""},
+    {"name": "apiKey", "value": "${JELLYFIN_API_KEY}"},
+    {"name": "notify", "value": false},
+    {"name": "updateLibrary", "value": true},
+    {"name": "mapFrom", "value": ""},
+    {"name": "mapTo", "value": ""}
+  ],
+  "tags": []
+}
+JSON
+)
+            else
+                payload=$(cat <<JSON
+{
+  "name": "Jellyfin",
+  "implementation": "MediaBrowser",
+  "implementationName": "Emby / Jellyfin",
+  "configContract": "MediaBrowserSettings",
+  "onGrab": false,
+  "onDownload": true,
+  "onUpgrade": true,
+  "onRename": true,
+  "onMovieAdded": false,
+  "onMovieDelete": false,
+  "onMovieFileDelete": false,
+  "onMovieFileDeleteForUpgrade": false,
+  "onHealthIssue": false,
+  "includeHealthWarnings": false,
+  "onHealthRestored": false,
+  "onApplicationUpdate": false,
+  "onManualInteractionRequired": false,
+  "fields": [
+    {"name": "host", "value": "jellyfin"},
+    {"name": "port", "value": 8096},
+    {"name": "useSsl", "value": false},
+    {"name": "urlBase", "value": ""},
+    {"name": "apiKey", "value": "${JELLYFIN_API_KEY}"},
+    {"name": "notify", "value": false},
+    {"name": "updateLibrary", "value": true},
+    {"name": "mapFrom", "value": ""},
+    {"name": "mapTo", "value": ""}
+  ],
+  "tags": []
+}
+JSON
+)
+            fi
+
+            resp=$(arr_post "$base/api/v3/notification" "$key" "$payload")
+            if ok_code "$resp"; then
+                ok "$app_name -> Jellyfin auto-refresh hook created"
+            elif is_already_exists "$(body "$resp")"; then
+                skip "$app_name -> Jellyfin auto-refresh hook already configured"
+            else
+                fail "Failed to create $app_name -> Jellyfin hook (HTTP $(code "$resp")): $(body "$resp")"
+            fi
+        fi
+    }
+
+    ensure_jellyfin_hook "Radarr" "$RADARR_BASE" "$RADARR_KEY" "radarr"
+    ensure_jellyfin_hook "Sonarr" "$SONARR_BASE" "$SONARR_KEY" "sonarr"
+fi
+
 # ============================================================
 # 5. PROWLARR — Add Radarr + Sonarr as apps, trigger sync
 # ============================================================

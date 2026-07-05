@@ -218,7 +218,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 # Create config directory structure if missing
-mkdir -p "$STACK_DIR/config/"{qbittorrent,prowlarr,radarr,sonarr,jellyfin,jellyseerr,bazarr,recyclarr,homepage,uptime-kuma,audiobookshelf/metadata,gluetun}
+mkdir -p "$STACK_DIR/config/"{qbittorrent,prowlarr,radarr,sonarr,jellyfin,jellyseerr,bazarr,recyclarr,homepage,uptime-kuma,audiobookshelf/metadata,gluetun,flaresolverr}
 
 # Load .env
 set -o allexport; source "$ENV_FILE"; set +o allexport
@@ -402,7 +402,7 @@ for key in "${env_path_keys[@]}"; do
 done
 
 # Config directories
-mkdir -p "$STACK_DIR/config/"{qbittorrent,prowlarr,radarr,sonarr,jellyfin,jellyseerr,bazarr,recyclarr,homepage,uptime-kuma,audiobookshelf/metadata,gluetun}
+mkdir -p "$STACK_DIR/config/"{qbittorrent,prowlarr,radarr,sonarr,jellyfin,jellyseerr,bazarr,recyclarr,homepage,uptime-kuma,audiobookshelf/metadata,gluetun,flaresolverr}
 ok "Config directories created"
 
 # Gluetun control-server API key — used by the Homepage VPN widget

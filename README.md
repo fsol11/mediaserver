@@ -76,6 +76,7 @@ This single command does everything.
 Everything is configured automatically — no manual setup required:
 
 -   All service connections (download clients, indexers, media servers)
+-   Sonarr/Radarr → Jellyfin library auto-refresh hooks
 -   Jellyfin admin account, libraries, and FFmpeg path
 -   Jellyseerr Jellyfin auth + Radarr/Sonarr connections
 -   Prowlarr indexers and app sync
