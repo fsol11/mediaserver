@@ -77,6 +77,7 @@ Everything is configured automatically — no manual setup required:
 
 -   All service connections (download clients, indexers, media servers)
 -   Sonarr/Radarr → Jellyfin library auto-refresh hooks
+-   **Jellyfin deletion cascade**: Radarr & Sonarr auto-unmonitor when files are deleted, empty folders auto-cleaned
 -   Jellyfin admin account, libraries, and FFmpeg path
 -   Jellyseerr Jellyfin auth + Radarr/Sonarr connections
 -   Prowlarr indexers and app sync
@@ -132,3 +133,42 @@ bash configure.sh      # re-wire service connections only
 
 See [CLOUDFLARE\_SETUP.md](CLOUDFLARE_SETUP.md) to expose services over the internet  
 via Cloudflare Tunnel (no port forwarding needed).
+
+---
+
+## Deletion Cascade: Delete from Jellyfin → Everywhere
+
+When you delete an item from Jellyfin, it automatically cascades across the entire stack:
+
+### Flow
+
+1. **Delete from Jellyfin UI** → File deleted from disk
+2. **Radarr/Sonarr rescan** (automatic, ~1 min) → Detects missing file
+3. **Auto-unmonitor** → Entry removed from Radarr/Sonarr monitoring list
+4. **Clean up** → Empty folders deleted automatically
+
+### Technical Details
+
+| Setting                              | Value                                              |
+|--------------------------------------|-----|
+| **Jellyfin**                         | `EnableMediaDeletion=true` (enables file deletion) |
+| **Radarr**                           | `AutoUnmonitorPreviouslyDownloadedMovies=true` + `DeleteEmptyFolders=true` |
+| **Sonarr**                           | `AutoUnmonitorPreviouslyDownloadedSeries=true` + `DeleteEmptyFolders=true` |
+
+All settings are applied automatically by `configure.sh` and persisted across restarts.
+
+### Example Workflow
+
+1. Delete "Avatar" from Jellyfin → `/mnt/DATA/Movies/Avatar` folder and video file deleted
+2. Radarr runs next disk rescan (within ~1 minute)
+3. Radarr notices Avatar video is missing → Auto-unmonitors it
+4. Empty `/mnt/DATA/Movies/Avatar` folder deleted by Radarr cleanup
+5. Avatar no longer appears in Radarr monitoring list or Jellyfin library
+
+### Manual Management
+
+If you need to manually adjust these settings:
+
+- **Radarr**: Settings → Media Management → "Auto Unmonitor Previously Downloaded Movies"
+- **Sonarr**: Settings → Media Management → "Auto Unmonitor Previously Downloaded Series"
+- **Jellyfin**: Dashboard → Devices → Settings → "Enable Media Deletion" (default enabled)

@@ -634,7 +634,7 @@ d['onManualInteractionRequired']=False
 
 if kind=='sonarr':
     d['onImportComplete']=True
-    d['onSeriesAdd']=False
+    d['onSeriesAdd']=True
     d['onSeriesDelete']=False
     d['onEpisodeFileDelete']=False
     d['onEpisodeFileDeleteForUpgrade']=False
@@ -684,7 +684,7 @@ print(json.dumps(d))
   "onUpgrade": true,
   "onImportComplete": true,
   "onRename": true,
-  "onSeriesAdd": false,
+    "onSeriesAdd": true,
   "onSeriesDelete": false,
   "onEpisodeFileDelete": false,
   "onEpisodeFileDeleteForUpgrade": false,
@@ -758,6 +758,37 @@ JSON
 
     ensure_jellyfin_hook "Radarr" "$RADARR_BASE" "$RADARR_KEY" "radarr"
     ensure_jellyfin_hook "Sonarr" "$SONARR_BASE" "$SONARR_KEY" "sonarr"
+    
+    # Deletion cascade: auto-unmonitor when files deleted from disk
+    section "Deletion Cascade (auto-unmonitor missing files)"
+    
+    resp=$(curl -fsS "$RADARR_BASE/api/v3/config/mediamanagement" \
+        -H "X-Api-Key: $RADARR_KEY" | \
+        jq '.autoUnmonitorPreviouslyDownloadedMovies = true | .deleteEmptyFolders = true' | \
+        curl -fsS -X PUT "$RADARR_BASE/api/v3/config/mediamanagement" \
+            -H "X-Api-Key: $RADARR_KEY" \
+            -H 'Content-Type: application/json' \
+            -d @-)
+    
+    if echo "$resp" | jq -e '.autoUnmonitorPreviouslyDownloadedMovies == true' &>/dev/null; then
+        ok "Radarr: Auto-unmonitor + delete-empty-folders enabled"
+    else
+        warn "Radarr: Deletion settings may not have applied (check manually)"
+    fi
+    
+    resp=$(curl -fsS "$SONARR_BASE/api/v3/config/mediamanagement" \
+        -H "X-Api-Key: $SONARR_KEY" | \
+        jq '.autoUnmonitorPreviouslyDownloadedEpisodes = true | .deleteEmptyFolders = true' | \
+        curl -fsS -X PUT "$SONARR_BASE/api/v3/config/mediamanagement" \
+            -H "X-Api-Key: $SONARR_KEY" \
+            -H 'Content-Type: application/json' \
+            -d @-)
+    
+    if echo "$resp" | jq -e '.deleteEmptyFolders == true' &>/dev/null; then
+        ok "Sonarr: Auto-unmonitor + delete-empty-folders enabled"
+    else
+        warn "Sonarr: Deletion settings may not have applied (check manually)"
+    fi
 fi
 
 # ============================================================
