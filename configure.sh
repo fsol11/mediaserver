@@ -202,10 +202,30 @@ print(json.dumps({
 fi
 
 if [[ "$qbit_logged_in" == true ]]; then
+    # Bind qBittorrent to the VPN interface (tun0) so libtorrent sources ALL
+    # peer/DHT traffic through Gluetun's WireGuard tunnel. Without this, libtorrent
+    # binds to the Docker bridge (eth0/172.18.0.x); Gluetun's policy routing
+    # (ip rule "from 172.18.0.2 lookup 200") then pushes that traffic out eth0,
+    # where the kill switch drops it. Symptom: connection status "firewalled",
+    # dht_nodes stuck at 0, and no torrents download despite the VPN being up.
+    vpn_if=$(docker exec gluetun sh -c 'ip -o link show 2>/dev/null | grep -oE "tun[0-9]+|wg[0-9]+" | head -1')
+    vpn_if=${vpn_if:-tun0}
+    prefs_json=$(python3 -c "
+import json, sys
+print(json.dumps({
+    'save_path': '/downloads',
+    'temp_path': '/downloads/incomplete',
+    'temp_path_enabled': True,
+    'incomplete_files_ext': True,
+    'current_network_interface': sys.argv[1],
+    'current_interface_address': ''
+}))" "$vpn_if")
     prefs_resp=$(curl -s -o /dev/null -w "%{http_code}" -b "$QBIT_COOKIE" \
         -X POST "http://localhost:8080/api/v2/app/setPreferences" \
-        --data-urlencode 'json={"save_path":"/downloads","temp_path":"/downloads/incomplete","temp_path_enabled":true,"incomplete_files_ext":true}')
-    [[ "$prefs_resp" == "200" ]] && ok "Save path set to /downloads" || fail "Could not set preferences (HTTP $prefs_resp)"
+        --data-urlencode "json=$prefs_json")
+    [[ "$prefs_resp" == "200" ]] \
+        && ok "Save path set to /downloads; bound to VPN interface ($vpn_if)" \
+        || fail "Could not set preferences (HTTP $prefs_resp)"
 else
     fail "qBittorrent login failed — check ADMIN_USER/ADMIN_PASSWORD in .env"
 fi

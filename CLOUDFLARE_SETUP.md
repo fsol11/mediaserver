@@ -44,18 +44,27 @@ Create the API token at https://dash.cloudflare.com/profile/api-tokens with perm
 - **Account → Cloudflare Tunnel → Edit**
 - **Zone → DNS → Edit** (for your domain's zone)
 
-Then run `bash configure.sh` — it handles Step 2 and Step 3 below automatically.
+Then run:
 
----
-7. Click **Next** — you'll configure hostnames in Step 3
+```bash
+bash install.sh
+```
 
----
+`install.sh` starts `cloudflared` (when `CLOUDFLARE_TUNNEL_TOKEN` is set) and runs `configure.sh`,
+which applies the tunnel ingress rules and DNS records.
+
+If your stack is already running and you only added Cloudflare variables later, run:
+
+```bash
+docker compose --profile cloudflare up -d cloudflared
+bash configure.sh
+```
 
 ## Step 2 — Start Cloudflared
 
 ```bash
-cd /media/john/DATA/mediaserver
-docker compose up -d cloudflared
+cd /path/to/mediaserver
+docker compose --profile cloudflare up -d cloudflared
 ```
 
 Wait ~30 seconds, then check the tunnel is connected:
@@ -83,7 +92,7 @@ Configure one entry per service you want exposed. Use the container names as the
 | `jellyfin` | yourdomain.com | `http://jellyfin:8096` | Has its own login |
 | `requests` | yourdomain.com | `http://jellyseerr:5055` | Has its own login |
 | `books` | yourdomain.com | `http://audiobookshelf:80` | Has its own login |
-| `home` | yourdomain.com | `http://homepage:3000` | Protect with Access (Step 4) |
+| `homepage` | yourdomain.com | `http://homepage:3000` | Protect with Access (Step 4) |
 | `status` | yourdomain.com | `http://uptime-kuma:3001` | Protect with Access (Step 4) |
 | `radarr` | yourdomain.com | `http://radarr:7878` | Protect with Access (Step 4) |
 | `sonarr` | yourdomain.com | `http://sonarr:8989` | Protect with Access (Step 4) |
@@ -111,7 +120,7 @@ open to the public internet. Cloudflare Access adds a login gate in front of the
    - **Session duration**: 24 hours (or your preference)
    - **Application domain**: Add one entry per admin service:
      ```
-     home.yourdomain.com
+       homepage.yourdomain.com
      status.yourdomain.com
      radarr.yourdomain.com
      sonarr.yourdomain.com
@@ -130,14 +139,12 @@ code to your email before showing the service.
 
 ---
 
-## Step 5 — Jellyfin Extra Config (Reverse Proxy Headers)
+## Step 5 — Jellyfin Reverse Proxy Notes
 
-Jellyfin needs to trust the forwarded headers from Cloudflare. In Jellyfin:
+No manual Jellyfin network edits are usually required when you run `install.sh`.
+The automation in `configure.sh` updates Jellyfin's network settings for tunnel traffic.
 
-1. **Dashboard → Networking**
-2. Set **Known proxies** to: `172.16.0.0/12` (covers all Docker bridge networks)
-3. Enable **Allow remote connections to this server**
-4. Save and restart Jellyfin
+If you skip automation and configure manually, make sure Jellyfin trusts your Docker proxy subnet.
 
 ---
 
@@ -149,7 +156,7 @@ Test each public hostname in your browser:
 https://jellyfin.yourdomain.com     ← should show Jellyfin login
 https://requests.yourdomain.com     ← should show Jellyseerr
 https://books.yourdomain.com        ← should show Audiobookshelf
-https://home.yourdomain.com         ← should prompt Cloudflare Access email
+https://homepage.yourdomain.com     ← should prompt Cloudflare Access email
 https://radarr.yourdomain.com       ← should prompt Cloudflare Access email
 ```
 
@@ -185,7 +192,7 @@ No ports are exposed on your router. All traffic flows outbound through the tunn
 ```bash
 docker logs cloudflared --tail 50
 ```
-Verify the token in `install.env` is correct and complete.
+Verify the token in `.env` is correct and complete.
 
 **502 Bad Gateway on a hostname**
 - Check the backend URL in the Zero Trust dashboard matches the container name exactly

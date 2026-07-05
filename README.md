@@ -1,6 +1,6 @@
 # Media Server
 
-A fully automated, self-hosted media server stack that deploys 15 Docker containers and wires them all together with a single command. It handles downloading, organizing, streaming, and subtitling movies, TV shows, and audiobooks — no manual configuration needed.
+A fully automated, self-hosted media server stack that deploys 14 Docker containers by default (15 when Cloudflare Tunnel is enabled) and wires them all together with a single command. It handles downloading, organizing, streaming, and subtitling movies, TV shows, and audiobooks — no manual configuration needed.
 
 | Container        | Role                                            |
 |------------------|-------------------------------------------------|
@@ -56,8 +56,10 @@ Some public providers are listed in these already. If you don't want to customiz
 -   **`BAZARR_PROVIDERS`** — comma-separated subtitle providers (see Bazarr UI → Settings → Providers for names)
 -   **`PROWLARR_INDEXERS`** — comma-separated public indexers (see Prowlarr UI → Indexers → Add Indexer for names)
 
-If you would like to install Cloudflard, add the token here. Read [CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md) for more information
--   **`CLOUDFLARE_TUNNEL_TOKEN`** — *(optional)* for remote access via Cloudflare Tunnel
+If you want Cloudflare Tunnel remote access, configure these variables (see [CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md)):
+-   **`CLOUDFLARE_TUNNEL_TOKEN`** — *(optional)* enables the `cloudflared` container/profile
+-   **`CF_DOMAIN`** — your Cloudflare-managed domain (for generated hostnames)
+-   **`CF_API_TOKEN`** — required for automatic tunnel hostname + DNS record creation in `configure.sh`
 
 API keys are populated automatically — do not edit them manually.
 
