@@ -483,6 +483,29 @@ else
     die "Failed to start one or more containers"
 fi
 
+# Re-attach VPN-routed containers to gluetun's network namespace.
+# On an upgrade, if gluetun's image changed it is recreated with a NEW container
+# id — but `docker compose up -d` does NOT recreate dependents whose own image was
+# unchanged (e.g. cloudflared). Those keep pointing at the OLD, now-dead namespace
+# ("sendmsg: network is unreachable"). Detect stragglers by comparing each
+# service:gluetun consumer's namespace id against the live gluetun id, and
+# force-recreate the ones left behind.
+gluetun_id=$(docker inspect -f '{{.Id}}' gluetun 2>/dev/null || true)
+if [[ -n "$gluetun_id" ]]; then
+    for svc in $(docker compose -f "$STACK_DIR/docker-compose.yml" config --services); do
+        nm=$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$svc" 2>/dev/null) || continue
+        case "$nm" in
+            container:*)
+                if [[ "${nm#container:}" != "$gluetun_id" ]]; then
+                    info "Re-attaching $svc to the refreshed VPN namespace..."
+                    docker compose -f "$STACK_DIR/docker-compose.yml" up -d --force-recreate --no-deps "$svc" >/dev/null 2>&1 \
+                        && ok "$svc re-attached to gluetun" \
+                        || fail "Could not re-attach $svc — run: docker compose up -d --force-recreate $svc"
+                fi ;;
+        esac
+    done
+fi
+
 echo ""
 info "Waiting for services to initialize (adaptive)..."
 wait_for_first_boot 300 || true

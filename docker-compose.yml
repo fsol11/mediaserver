@@ -27,8 +27,11 @@ services:
   #   - their published ports live on this container
   #   - they reach each other via localhost or service hostnames
   #     (the aliases below keep the old hostnames resolving)
-  #   - after restarting gluetun alone, run `docker compose up -d`
-  #     to re-attach the dependent containers
+  #   - after gluetun is recreated (restart or image upgrade), dependents
+  #     whose own image did NOT change are left on the old, dead namespace.
+  #     `docker compose up -d` does NOT fix them — force-recreate the
+  #     stragglers: `docker compose up -d --force-recreate --no-deps <svc>`
+  #     (e.g. cloudflared). install.sh does this automatically after `up -d`.
   # ============================================================
   gluetun:
     image: qmcgaw/gluetun:latest
