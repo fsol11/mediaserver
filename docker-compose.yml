@@ -411,7 +411,11 @@ services:
   # No WebUI needed - runs as a headless browser proxy
   # ============================================================
   flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
+    # Pinned: the :latest tag is currently broken upstream — the image ships
+    # a Cmd of `python -u /app/flaresolverr.py` but omits that file, so the
+    # container crash-loops with "can't open file '/app/flaresolverr.py'".
+    # v3.3.21 is the last known-good release. See github.com/FlareSolverr/FlareSolverr.
+    image: ghcr.io/flaresolverr/flaresolverr:v3.3.21
     container_name: flaresolverr
     environment:
       - TZ=${TZ}

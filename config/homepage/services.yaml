@@ -62,6 +62,13 @@
           url: http://prowlarr:9696
           key: "{{HOMEPAGE_VAR_PROWLARR_KEY}}"
 
+    - FlareSolverr:
+        description: Cloudflare Proxy (for indexers)
+        icon: flaresolverr.png
+        widget:
+          type: flaresolverr
+          url: http://flaresolverr:8191
+
     - Unpackerr:
         href: https://qbit.{{HOMEPAGE_VAR_CF_DOMAIN}}
         description: Archive Extractor
